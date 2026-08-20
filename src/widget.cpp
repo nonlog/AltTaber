@@ -14,6 +14,8 @@
 #include <QHideEvent>
 #include <QMouseEvent>
 #include <QStyleHints>
+#include <QSettings>
+#include <QFrame>
 #include <QtMath>
 #include <limits>
 #include <algorithm>
@@ -34,7 +36,16 @@ namespace {
     constexpr int PreviewInset = 8;
 
     bool useDarkPalette() {
+#ifdef Q_OS_WIN
+        // Qt can report a stale/incorrect color scheme for this translucent native window.
+        // Windows' AppsUseLightTheme is the source of truth used by the shell UI.
+        QSettings personalize(
+            R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)",
+            QSettings::NativeFormat);
+        return personalize.value("AppsUseLightTheme", 1).toInt() == 0;
+#else
         return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+#endif
     }
 
     int titleHeightForCard(const QRect& card) {
@@ -139,6 +150,11 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setResizeMode(QListView::Adjust);
     lw->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     lw->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // QListView's default frame makes viewport() a few pixels narrower than the widget.
+    // With an exact N*gridWidth size that silently wraps the last column and clips rows.
+    lw->setFrameShape(QFrame::NoFrame);
+    lw->setContentsMargins(0, 0, 0, 0);
+    lw->setViewportMargins(0, 0, 0, 0);
     lw->setIconSize({22, 22});
     lw->setGridSize({DesiredCardWidth, DesiredCardHeight});
     lw->setUniformItemSizes(true);
@@ -271,8 +287,8 @@ void Widget::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing);
 
     const bool dark = useDarkPalette();
-    const QColor fill = dark ? QColor(31, 31, 31, 224) : QColor(243, 243, 243, 226);
-    const QColor border = dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 22);
+    const QColor fill = dark ? QColor(32, 32, 32, 205) : QColor(248, 248, 248, 205);
+    const QColor border = dark ? QColor(255, 255, 255, 30) : QColor(0, 0, 0, 24);
 
     painter.setPen(QPen(border, 1));
     painter.setBrush(fill);
@@ -545,8 +561,26 @@ bool Widget::prepareListWidget() {
         lw->addItem(item);
     }
 
-    lw->setFixedSize(bestColumns * bestCardSize.width(), bestRows * bestCardSize.height());
+    // +1 prevents a style/DPI rounding edge from making the viewport one pixel too small
+    // and moving a whole column to the next row. The frame itself is disabled above.
+    lw->setFixedSize(bestColumns * bestCardSize.width() + 1,
+                     bestRows * bestCardSize.height() + 1);
     lw->doItemsLayout();
+
+    // Defensive check: every item must actually be inside the viewport. If Qt's style
+    // still rounds a grid boundary differently at a fractional DPI, expand only by
+    // the exact missing pixels rather than leaving a blank card-sized region.
+    QRect laidOutBounds;
+    for (int i = 0; i < lw->count(); ++i)
+        laidOutBounds = laidOutBounds.united(lw->visualItemRect(lw->item(i)));
+    if (laidOutBounds.isValid()) {
+        const int missingWidth = qMax(0, laidOutBounds.right() + 1 - lw->viewport()->width());
+        const int missingHeight = qMax(0, laidOutBounds.bottom() + 1 - lw->viewport()->height());
+        if (missingWidth || missingHeight) {
+            lw->setFixedSize(lw->width() + missingWidth, lw->height() + missingHeight);
+            lw->doItemsLayout();
+        }
+    }
 
     QRect lwRect(QPoint(0, 0), lw->size());
     auto thisRect = lwRect.marginsAdded(ListWidgetMargin);
