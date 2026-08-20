@@ -1,4 +1,4 @@
-#include "utils/ScheduledTask.h"
+﻿#include "utils/ScheduledTask.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -15,6 +15,12 @@
 namespace {
 QString xmlEscape(const QString& value) {
     return value.toHtmlEscaped();
+}
+
+QString quoteCommandLineArg(QString value) {
+    value.replace("\\", "\\\\");
+    value.replace("\"", "\\\"");
+    return '"' + value + '"';
 }
 
 QString xmlUnescape(QString value) {
@@ -185,7 +191,7 @@ QString ScheduledTask::createTaskXml(const QString& exePath, const QString& desc
 
 bool ScheduledTask::runElevatedSelf(const QStringList& args) {
     const std::wstring executable = QDir::toNativeSeparators(qApp->applicationFilePath()).toStdWString();
-    const std::wstring parameters = QProcess::joinCommand(args).toStdWString();
+    QStringList quotedArgs;`r`n    for (const auto& arg: args)`r`n        quotedArgs << quoteCommandLineArg(arg);`r`n    const std::wstring parameters = quotedArgs.join(' ').toStdWString();
 
     SHELLEXECUTEINFOW info{};
     info.cbSize = sizeof(info);
@@ -273,3 +279,4 @@ bool ScheduledTask::deleteTask(const QString& taskName, bool requestElevation) {
         return runElevatedSelf({"--startup-task-helper", "delete", taskName});
     return runSchtasks({"/delete", "/tn", taskName, "/f"});
 }
+
