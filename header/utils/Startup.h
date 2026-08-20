@@ -1,78 +1,80 @@
-﻿#ifndef WIN_SWITCHER_STARTUP_H
+#ifndef WIN_SWITCHER_STARTUP_H
 #define WIN_SWITCHER_STARTUP_H
 
-#include <QString>
-#include <QSettings>
-#include <QDir>
 #include <QApplication>
 #include <QDebug>
-#include <QMessageBox>
+#include <QDir>
+#include <QSettings>
 #include <shlobj_core.h>
 
-// ScheduledTask.h 可选，作为一个插件，用以支持以[管理员权限]自启动
-#if __has_include("ScheduledTask.h")
-# define HAS_SCHTASK
-# include "ScheduledTask.h"
-#else
-# warning "ScheduledTask.h not found, use registry instead."
-#endif
+#include "ScheduledTask.h"
 
 class Startup {
 public:
+    enum class Mode {
+        Disabled,
+        Normal,
+        Elevated
+    };
+
     Startup() = delete;
-    friend class SystemTray;
 
-    static void on() {
-#ifdef HAS_SCHTASK
-        // MS doc: 此函数是 CheckTokenMembership 的包装器, 建议直接调用该函数来确定管理员组状态; 而不是调用 IsUserAnAdmin
-        if (IsUserAnAdmin()) {
-            off_reg();
-            if (!ScheduledTask::createTask(SCHTASK_NAME))
-                QMessageBox::warning(nullptr, "Failed to create ScheduledTask", "maybe check log?(if any)");
-            // 这里使用`QMessageBox`而非`sysTray.showMessage`，是为了避免循环依赖 & 保持Startup独立性
-        } else {
-            // 但是一般认为 reg || schtasks 有一个存在就是自启动了，此时不会调用该函数，也不会进入这个if
-            if (ScheduledTask::queryTask(SCHTASK_NAME)) { // no admin, can't delete
-                QMessageBox::warning(nullptr, "Conflict: schtask vs reg",
-                                     "ScheduledTask exists, but no privilege to delete. Please run as Administrator & do it again.");
-            } else
-                on_reg();
-        }
-#else
-        on_reg();
-#endif
-    }
-
-    static void off() {
-        off_reg();
-#ifdef HAS_SCHTASK
-        if (ScheduledTask::queryTask(SCHTASK_NAME)) {
-            if (!ScheduledTask::deleteTask(SCHTASK_NAME)) {
-                bool isAdmin = IsUserAnAdmin();
-                qWarning() << "Failed to delete ScheduledTask:" << SCHTASK_NAME << isAdmin;
-                QMessageBox::warning(nullptr, QString("Failed to delete ScheduledTask: %1").arg(SCHTASK_NAME),
-                                     isAdmin ?
-                                     "em mm, something went wrong... maybe check log?(if any)" :
-                                     "Please run as Administrator & do it again.");
-            }
-        }
-#endif
-    }
-
-    static void toggle() {
-        isOn() ? off() : on();
-    }
-
-    static void set(bool _on) {
-        _on ? on() : off();
+    static Mode mode() {
+        if (ScheduledTask::queryTaskRunsElevated(SCHTASK_NAME))
+            return Mode::Elevated;
+        if (isOn_reg())
+            return Mode::Normal;
+        return Mode::Disabled;
     }
 
     static bool isOn() {
-#ifdef HAS_SCHTASK
-        return isOn_reg() || ScheduledTask::queryTask(SCHTASK_NAME);
-#else
-        return isOn_reg();
-#endif
+        return mode() != Mode::Disabled;
+    }
+
+    static bool isElevatedOn() {
+        return mode() == Mode::Elevated;
+    }
+
+    static bool setMode(Mode wantedMode) {
+        const bool needElevation = !IsUserAnAdmin();
+
+        if (wantedMode == Mode::Elevated) {
+            // Create the replacement first. If the UAC prompt is cancelled, preserve any existing
+            // normal startup entry rather than silently disabling startup altogether.
+            if (!ScheduledTask::createTask(SCHTASK_NAME, true, needElevation))
+                return false;
+            off_reg();
+            return mode() == Mode::Elevated;
+        }
+
+        if (ScheduledTask::taskExists(SCHTASK_NAME)) {
+            if (!ScheduledTask::deleteTask(SCHTASK_NAME, needElevation))
+                return false;
+        }
+
+        if (wantedMode == Mode::Normal) {
+            on_reg();
+            return mode() == Mode::Normal;
+        }
+
+        off_reg();
+        return mode() == Mode::Disabled;
+    }
+
+    static bool on() {
+        return setMode(Mode::Normal);
+    }
+
+    static bool off() {
+        return setMode(Mode::Disabled);
+    }
+
+    static bool toggle() {
+        return isOn() ? off() : on();
+    }
+
+    static bool set(bool enabled) {
+        return enabled ? on() : off();
     }
 
 private:
@@ -92,21 +94,18 @@ private:
 
     static bool isOn_reg() {
         QSettings reg(REG_AUTORUN, QSettings::NativeFormat);
-        auto appPath = applicationPath();
-        auto path = reg.value(REG_APP_NAME);
-        if (path.isValid() && path.toString() != appPath) // just for warning
+        const auto appPath = applicationPath();
+        const auto path = reg.value(REG_APP_NAME);
+        if (path.isValid() && path.toString() != appPath)
             qWarning() << "REG: AutoRun path mismatch:" << path.toString() << appPath;
-        return path.toString() == appPath;
+        return path.toString().compare(appPath, Qt::CaseInsensitive) == 0;
     }
 
 private:
-    // HKEY_CURRENT_USER 仅仅对当前用户有效，但不需要管理员权限
-    inline static const auto REG_AUTORUN = R"(HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run)";
-    // 标识符，不能重复
+    inline static const auto REG_AUTORUN =
+        R"(HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Run)";
     inline static const auto REG_APP_NAME = "AltTaber.MrBeanCpp";
-#ifdef HAS_SCHTASK
     inline static const auto SCHTASK_NAME = "AltTaber Startup";
-#endif
 };
 
-#endif //WIN_SWITCHER_STARTUP_H
+#endif // WIN_SWITCHER_STARTUP_H

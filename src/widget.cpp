@@ -5,6 +5,7 @@
 #include <QWindow>
 #include <QScreen>
 #include <QPainter>
+#include <QPalette>
 #include <QPen>
 #include <QDateTime>
 #include <QStyledItemDelegate>
@@ -47,6 +48,27 @@ namespace {
 #else
         return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
 #endif
+    }
+
+    QColor systemAccentColor() {
+#ifdef Q_OS_WIN
+        DWORD colorization = 0;
+        BOOL opaqueBlend = FALSE;
+        if (SUCCEEDED(DwmGetColorizationColor(&colorization, &opaqueBlend))) {
+            Q_UNUSED(opaqueBlend);
+            return QColor((colorization >> 16) & 0xFF,
+                          (colorization >> 8) & 0xFF,
+                          colorization & 0xFF);
+        }
+
+        QSettings dwm(R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\DWM)",
+                      QSettings::NativeFormat);
+        bool ok = false;
+        const quint32 raw = dwm.value("ColorizationColor").toUInt(&ok);
+        if (ok)
+            return QColor((raw >> 16) & 0xFF, (raw >> 8) & 0xFF, raw & 0xFF);
+#endif
+        return QApplication::palette().color(QPalette::Highlight);
     }
 
     int titleHeightForCard(const QRect& card) {
@@ -92,12 +114,13 @@ namespace {
             const QColor cardFill = dark ? QColor(48, 48, 48, 232) : QColor(255, 255, 255, 226);
             const QColor selectedFill = dark ? QColor(58, 58, 58, 244) : QColor(255, 255, 255, 246);
             const QColor border = dark ? QColor(255, 255, 255, 34) : QColor(0, 0, 0, 28);
-            const QColor selectedBorder = dark ? QColor(232, 232, 232, 220) : QColor(74, 74, 74, 210);
+            const QColor selectedBorder = systemAccentColor();
             const QColor previewFill = dark ? QColor(20, 20, 20, 210) : QColor(235, 235, 235, 235);
             const QColor textColor = dark ? QColor(247, 247, 247) : QColor(32, 32, 32);
 
             QPen cardPen(selected ? selectedBorder : border);
-            cardPen.setWidthF(selected ? 2.0 : 1.0);
+            cardPen.setWidthF(selected ? 3.0 : 1.0);
+            cardPen.setJoinStyle(Qt::RoundJoin);
             painter->setPen(cardPen);
             painter->setBrush(selected ? selectedFill : cardFill);
             painter->drawRoundedRect(card, 10, 10);

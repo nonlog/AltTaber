@@ -67,21 +67,22 @@ private:
         act_startup->setCheckable(true);
         // triggered vs toggled: setChecked() will emit `toggled`, but not `triggered` (which is pure user action)
         connect(act_startup, &QAction::triggered, this, [this](bool checked) {
-            Startup::toggle();
-            if (Startup::isOn() == checked)
+            const bool ok = checked ? Startup::setMode(Startup::Mode::Normal)
+                                    : Startup::setMode(Startup::Mode::Disabled);
+            if (ok && Startup::isOn() == checked)
                 this->showMessage("auto Startup mode", checked ? "ON √" : "OFF ×");
             else
                 this->showMessage("Action Failed", "Failed to change Startup mode", Warning);
         });
         // aboutToShow 时查询，反映真实状态
         connect(menu, &QMenu::aboutToShow, act_startup, [act_startup] {
-            act_startup->setChecked(Startup::isOn()); // 10-30ms
+            const auto startupMode = Startup::mode();
+            act_startup->setChecked(startupMode != Startup::Mode::Disabled);
 
-            static auto text = act_startup->text();
-            if (IsUserAnAdmin() && !Startup::isOn_reg())
-                act_startup->setText(text + "🔑️"); // 意味着接下来的操作需要管理员权限（操作schtask）
-            else
-                act_startup->setText(text);
+            static const auto text = act_startup->text();
+            act_startup->setText(startupMode == Startup::Mode::Elevated
+                                     ? text + " (Administrator)"
+                                     : text);
         });
 
         // menu_monitor

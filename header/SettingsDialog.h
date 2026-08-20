@@ -22,12 +22,13 @@ protected:
 
 private:
     void loadSettings();
-    void saveSettings();
+    bool saveSettings();
     void updateApplyState();
     void updateFontPreview();
     void openConfigFile();
 
     QCheckBox* startupCheck{};
+    QCheckBox* adminStartupCheck{};
     QComboBox* monitorCombo{};
     QFontComboBox* fontCombo{};
     QSpinBox* fontSizeSpin{};

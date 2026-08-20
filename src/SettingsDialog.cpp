@@ -9,6 +9,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QShowEvent>
 #include <QSpinBox>
@@ -21,8 +22,8 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(tr("AltTaber Settings"));
     setWindowIcon(QIcon(":/img/icon.ico"));
     setModal(false);
-    resize(580, 440);
-    setMinimumSize(540, 410);
+    resize(580, 470);
+    setMinimumSize(540, 440);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(22, 20, 22, 20);
@@ -36,7 +37,10 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     auto* generalLayout = new QVBoxLayout(generalGroup);
     generalLayout->setContentsMargins(14, 14, 14, 14);
     startupCheck = new QCheckBox(tr("Start AltTaber with Windows"), generalGroup);
+    adminStartupCheck = new QCheckBox(tr("Run at startup as administrator"), generalGroup);
+    adminStartupCheck->setToolTip(tr("Uses a Windows Task Scheduler logon task with highest privileges. Enabling or disabling this mode may show one UAC prompt."));
     generalLayout->addWidget(startupCheck);
+    generalLayout->addWidget(adminStartupCheck);
     root->addWidget(generalGroup);
 
     auto* displayGroup = new QGroupBox(tr("Display"), this);
@@ -93,14 +97,18 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
 
     connect(openConfig, &QPushButton::clicked, this, &SettingsDialog::openConfigFile);
     connect(buttons, &QDialogButtonBox::accepted, this, [this] {
-        saveSettings();
-        accept();
+        if (saveSettings())
+            accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-    connect(applyButton, &QPushButton::clicked, this, &SettingsDialog::saveSettings);
+    connect(applyButton, &QPushButton::clicked, this, [this] { saveSettings(); });
 
     const auto changed = [this] { updateApplyState(); };
-    connect(startupCheck, &QCheckBox::toggled, this, changed);
+    connect(startupCheck, &QCheckBox::toggled, this, [this](bool enabled) {
+        adminStartupCheck->setEnabled(enabled);
+        updateApplyState();
+    });
+    connect(adminStartupCheck, &QCheckBox::toggled, this, changed);
     connect(monitorCombo, &QComboBox::currentIndexChanged, this, changed);
     connect(fontCombo, &QFontComboBox::currentFontChanged, this, [this] {
         updateFontPreview();
@@ -121,7 +129,10 @@ void SettingsDialog::showEvent(QShowEvent* event) {
 
 void SettingsDialog::loadSettings() {
     loading = true;
-    startupCheck->setChecked(Startup::isOn());
+    const auto startupMode = Startup::mode();
+    startupCheck->setChecked(startupMode != Startup::Mode::Disabled);
+    adminStartupCheck->setChecked(startupMode == Startup::Mode::Elevated);
+    adminStartupCheck->setEnabled(startupCheck->isChecked());
 
     const int monitorIndex = monitorCombo->findData(static_cast<int>(cfg.getDisplayMonitor()));
     monitorCombo->setCurrentIndex(monitorIndex >= 0 ? monitorIndex : 0);
@@ -135,18 +146,29 @@ void SettingsDialog::loadSettings() {
     applyButton->setEnabled(false);
 }
 
-void SettingsDialog::saveSettings() {
-    const bool wantedStartup = startupCheck->isChecked();
-    if (Startup::isOn() != wantedStartup)
-        Startup::set(wantedStartup);
+bool SettingsDialog::saveSettings() {
+    const auto wantedStartupMode = !startupCheck->isChecked()
+        ? Startup::Mode::Disabled
+        : (adminStartupCheck->isChecked() ? Startup::Mode::Elevated : Startup::Mode::Normal);
+
+    bool startupOk = true;
+    if (Startup::mode() != wantedStartupMode)
+        startupOk = Startup::setMode(wantedStartupMode);
 
     cfg.setDisplayMonitor(static_cast<DisplayMonitor>(monitorCombo->currentData().toInt()));
     cfg.set("label/font_family", fontCombo->currentFont().family());
     cfg.set("label/font_size", fontSizeSpin->value());
     cfg.notifyConfigEdited();
 
-    startupCheck->setChecked(Startup::isOn());
-    applyButton->setEnabled(false);
+    if (!startupOk) {
+        QMessageBox::warning(this, tr("Startup settings"),
+                             tr("Windows could not apply the requested startup mode. If administrator startup was selected, the UAC prompt may have been cancelled."));
+        loadSettings();
+        return false;
+    }
+
+    loadSettings();
+    return true;
 }
 
 void SettingsDialog::updateApplyState() {
