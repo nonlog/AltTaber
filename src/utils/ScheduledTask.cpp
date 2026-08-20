@@ -8,8 +8,8 @@
 #include <QTemporaryFile>
 #include <QXmlStreamReader>
 
-#include <shellapi.h>
 #include <windows.h>
+#include <shellapi.h>
 
 namespace {
 QString xmlEscape(const QString& value) {
