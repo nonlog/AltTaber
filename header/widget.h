@@ -107,7 +107,7 @@ private:
     const QMargins ListWidgetMargin{24, 24, 24, 24};
     /// exePath -> (HWND, time)
     QHash<QString, QHash<HWND, QDateTime>> winActiveOrder;
-    QList<HWND> groupWindowOrder; // for Alt+` 同组窗口切换
+    QList<HWND> groupWindowOrder; // temporary ordering for grouped-window wheel actions
     QList<RegisteredThumbnail> thumbnails;
     HWND pendingTargetWindow = nullptr;
 };

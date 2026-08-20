@@ -12,7 +12,10 @@
 #include <QStyleOptionViewItem>
 #include <QFontMetrics>
 #include <QHideEvent>
+#include <QMouseEvent>
+#include <QStyleHints>
 #include <QtMath>
+#include <limits>
 #include <algorithm>
 #include "utils/QtWin.h"
 #include <QWheelEvent>
@@ -23,19 +26,29 @@
 
 namespace {
     constexpr int PreviewAvailableRole = Qt::UserRole + 1;
-    constexpr int CardWidth = 252;
-    constexpr int CardHeight = 174;
-    constexpr int CardInset = 5;
-    constexpr int PreviewInset = 9;
-    constexpr int CaptionHeight = 40;
+    constexpr int DesiredCardWidth = 240;
+    constexpr int DesiredCardHeight = 160;
+    constexpr int MinimumCardWidth = 150;
+    constexpr int MinimumCardHeight = 100;
+    constexpr int CardInset = 4;
+    constexpr int PreviewInset = 8;
+
+    bool useDarkPalette() {
+        return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+    }
+
+    int titleHeightForCard(const QRect& card) {
+        return qBound(30, card.height() / 5, 38);
+    }
 
     QRect cardRectForOption(const QStyleOptionViewItem& option) {
         return option.rect.adjusted(CardInset, CardInset, -CardInset, -CardInset);
     }
 
     QRect previewRectForOption(const QStyleOptionViewItem& option) {
-        auto card = cardRectForOption(option);
-        return card.adjusted(PreviewInset, PreviewInset, -PreviewInset, -CaptionHeight);
+        const auto card = cardRectForOption(option);
+        const int titleHeight = titleHeightForCard(card);
+        return card.adjusted(PreviewInset, titleHeight + 3, -PreviewInset, -PreviewInset);
     }
 
     class WindowThumbnailDelegate final : public QStyledItemDelegate {
@@ -47,52 +60,61 @@ namespace {
             painter->save();
             painter->setRenderHint(QPainter::Antialiasing);
 
+            const bool dark = useDarkPalette();
             const bool selected = option.state & QStyle::State_Selected;
             const auto card = cardRectForOption(option);
             const auto preview = previewRectForOption(option);
+            const int titleHeight = titleHeightForCard(card);
 
-            QPen cardPen(selected ? QColor(245, 245, 245, 220) : QColor(255, 255, 255, 45));
+            const QColor cardFill = dark ? QColor(48, 48, 48, 232) : QColor(255, 255, 255, 226);
+            const QColor selectedFill = dark ? QColor(58, 58, 58, 244) : QColor(255, 255, 255, 246);
+            const QColor border = dark ? QColor(255, 255, 255, 34) : QColor(0, 0, 0, 28);
+            const QColor selectedBorder = dark ? QColor(232, 232, 232, 220) : QColor(74, 74, 74, 210);
+            const QColor previewFill = dark ? QColor(20, 20, 20, 210) : QColor(235, 235, 235, 235);
+            const QColor textColor = dark ? QColor(247, 247, 247) : QColor(32, 32, 32);
+
+            QPen cardPen(selected ? selectedBorder : border);
             cardPen.setWidthF(selected ? 2.0 : 1.0);
             painter->setPen(cardPen);
-            painter->setBrush(selected ? QColor(255, 255, 255, 40) : QColor(255, 255, 255, 18));
+            painter->setBrush(selected ? selectedFill : cardFill);
             painter->drawRoundedRect(card, 10, 10);
 
-            painter->setPen(QPen(QColor(255, 255, 255, 28), 1));
-            painter->setBrush(QColor(0, 0, 0, 58));
-            painter->drawRoundedRect(preview, 6, 6);
-
             const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-            if (!index.data(PreviewAvailableRole).toBool() && !icon.isNull()) {
-                const QSize fallbackSize(52, 52);
-                QRect fallback(QPoint(), fallbackSize);
-                fallback.moveCenter(preview.center());
-                icon.paint(painter, fallback, Qt::AlignCenter, QIcon::Normal);
-            }
-
-            const int iconSize = 22;
-            const int captionTop = preview.bottom() + 6;
-            QRect iconRect(card.left() + 12, captionTop + 3, iconSize, iconSize);
+            const int iconSize = qBound(18, titleHeight - 14, 22);
+            QRect iconRect(card.left() + 11, card.top() + (titleHeight - iconSize) / 2, iconSize, iconSize);
             if (!icon.isNull())
                 icon.paint(painter, iconRect, Qt::AlignCenter, QIcon::Normal);
 
-            QRect textRect(iconRect.right() + 9, captionTop,
-                           card.right() - iconRect.right() - 18,
-                           CaptionHeight - 8);
+            QRect textRect(iconRect.right() + 8, card.top(),
+                           card.right() - iconRect.right() - 16,
+                           titleHeight);
             auto font = option.font;
             if (font.pointSizeF() < 9.0)
                 font.setPointSizeF(9.0);
             painter->setFont(font);
-            painter->setPen(QColor(245, 245, 245));
+            painter->setPen(textColor);
             const QFontMetrics fm(font);
             const auto title = fm.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight,
                                              textRect.width());
             painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, title);
 
+            painter->setPen(QPen(dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 20), 1));
+            painter->setBrush(previewFill);
+            painter->drawRoundedRect(preview, 6, 6);
+
+            if (!index.data(PreviewAvailableRole).toBool() && !icon.isNull()) {
+                const int side = qBound(34, qMin(preview.width(), preview.height()) / 2, 56);
+                QRect fallback(QPoint(), QSize(side, side));
+                fallback.moveCenter(preview.center());
+                icon.paint(painter, fallback, Qt::AlignCenter, QIcon::Normal);
+            }
+
             painter->restore();
         }
 
-        QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override {
-            return {CardWidth, CardHeight};
+        QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex& index) const override {
+            const QSize hint = index.data(Qt::SizeHintRole).toSize();
+            return hint.isValid() ? hint : QSize(DesiredCardWidth, DesiredCardHeight);
         }
     };
 }
@@ -117,8 +139,8 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setResizeMode(QListView::Adjust);
     lw->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     lw->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    lw->setIconSize({28, 28});
-    lw->setGridSize({CardWidth, CardHeight});
+    lw->setIconSize({22, 22});
+    lw->setGridSize({DesiredCardWidth, DesiredCardHeight});
     lw->setUniformItemSizes(true);
     lw->setSpacing(0);
     lw->setStyleSheet(R"(
@@ -133,6 +155,8 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     )");
     lw->setItemDelegate(new WindowThumbnailDelegate(lw));
     lw->installEventFilter(this);
+    lw->viewport()->installEventFilter(this);
+    lw->viewport()->setMouseTracking(true);
 
     connect(lw, &QListWidget::currentItemChanged, this, [this](QListWidgetItem*, QListWidgetItem*) {
         pendingTargetWindow = nullptr;
@@ -169,22 +193,6 @@ void Widget::keyPressEvent(QKeyEvent* event) {
         // weird formula, but works (hhh)
         auto index = (i - (2 * isShiftPressed - 1) + lw->count()) % lw->count();
         lw->setCurrentRow(index);
-    } else if (key == Qt::Key_QuoteLeft && (modifiers & Qt::AltModifier)) { // Alt + `, 在前台窗口同组窗口内切换
-        if (this->isVisible() && !this->isMinimized()) {
-            // isVisible() == true if minimized
-            // 不使用`isForeground()`，即使`bringWindowToTop`(without active)，少数窗口也可能抢夺焦点，如`CAJViewer`
-            hide();
-            return;
-        }
-        auto foreWin = GetForegroundWindow();
-        if (groupWindowOrder.isEmpty()) {
-            auto targetExe = Util::getWindowProcessPath(foreWin);
-            groupWindowOrder = buildGroupWindowOrder(targetExe);
-        }
-        if (auto nextWin = rotateWindowInGroup(groupWindowOrder, foreWin, !(modifiers & Qt::ShiftModifier))) {
-            Util::switchToWindow(nextWin, true);
-            qInfo() << "(Alt+`)Switch to" << Util::getWindowTitle(nextWin) << Util::getClassName(nextWin);
-        }
     } else if (key == Qt::Key_Up || key == Qt::Key_Down) {
         if (auto item = lw->currentItem()) {
             auto center = lw->visualItemRect(item).center();
@@ -237,7 +245,7 @@ void Widget::setupLabelFont() {
 
 void Widget::keyReleaseEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Alt) {
-        groupWindowOrder.clear(); // for Alt + `
+        groupWindowOrder.clear(); // reset temporary grouped-window ordering
         if (this->isVisible()) {
             HWND target = pendingTargetWindow;
             if (!target) {
@@ -258,12 +266,17 @@ void Widget::keyReleaseEvent(QKeyEvent* event) {
     }
     QWidget::keyReleaseEvent(event);
 }
-void Widget::paintEvent(QPaintEvent*) { // painting prevents mouse-through on the translucent background
+void Widget::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(25, 25, 25, 150));
-    painter.drawRoundedRect(rect(), 12, 12);
+
+    const bool dark = useDarkPalette();
+    const QColor fill = dark ? QColor(31, 31, 31, 224) : QColor(243, 243, 243, 226);
+    const QColor border = dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 22);
+
+    painter.setPen(QPen(border, 1));
+    painter.setBrush(fill);
+    painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 13, 13);
 }
 
 void Widget::hideEvent(QHideEvent* event) {
@@ -456,21 +469,8 @@ bool Widget::prepareListWidget() {
 
     auto windowList = prepareWindowList();
     lw->clear();
-    for (auto& info: windowList) {
-        auto title = info.title;
-        if (title.isEmpty())
-            title = Util::getFileDescription(info.exePath);
-        if (title.isEmpty())
-            title = "Window";
 
-        auto* item = new QListWidgetItem(info.icon, title);
-        item->setData(Qt::UserRole, QVariant::fromValue(info));
-        item->setData(PreviewAvailableRole, false);
-        item->setSizeHint(lw->gridSize());
-        lw->addItem(item);
-    }
-
-    if (lw->count() == 0)
+    if (windowList.isEmpty())
         return false;
 
     bool displayOnPrimary = (cfg.getDisplayMonitor() == PrimaryMonitor);
@@ -488,14 +488,64 @@ bool Widget::prepareListWidget() {
     }
 
     const auto available = screen->availableGeometry();
-    const int maxColumnsByWidth = qMax(1, (available.width() - 96) / CardWidth);
-    const int columns = qMax(1, qMin(lw->count(), qMin(7, maxColumnsByWidth)));
-    const int rows = (lw->count() + columns - 1) / columns;
-    const int maxRowsByHeight = qMax(1, (available.height() - 96) / CardHeight);
-    const int visibleRows = qMin(rows, maxRowsByHeight);
+    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.90) - ListWidgetMargin.left() - ListWidgetMargin.right());
+    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.78) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
+    const int count = windowList.size();
+    constexpr qreal CardAspect = qreal(DesiredCardWidth) / qreal(DesiredCardHeight);
 
-    lw->setVerticalScrollBarPolicy(rows > visibleRows ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
-    lw->setFixedSize(columns * CardWidth, visibleRows * CardHeight);
+    int bestRows = 1;
+    int bestColumns = count;
+    QSize bestCardSize(DesiredCardWidth, DesiredCardHeight);
+    qreal bestScore = std::numeric_limits<qreal>::max();
+
+    for (int rows = 1; rows <= count; ++rows) {
+        const int columns = (count + rows - 1) / rows;
+        const int maxWidth = contentMaxWidth / columns;
+        const int maxHeight = contentMaxHeight / rows;
+        if (maxWidth <= 0 || maxHeight <= 0)
+            continue;
+
+        int cardWidth = qMin(DesiredCardWidth, maxWidth);
+        int cardHeight = qRound(cardWidth / CardAspect);
+        if (cardHeight > qMin(DesiredCardHeight, maxHeight)) {
+            cardHeight = qMin(DesiredCardHeight, maxHeight);
+            cardWidth = qRound(cardHeight * CardAspect);
+        }
+
+        const int undersize = qMax(0, MinimumCardWidth - cardWidth) +
+                              qMax(0, MinimumCardHeight - cardHeight);
+        const int emptyCells = rows * columns - count;
+        const qreal sizeLoss = (DesiredCardWidth - qMin(cardWidth, DesiredCardWidth)) * 0.75 +
+                               (DesiredCardHeight - qMin(cardHeight, DesiredCardHeight)) * 0.45;
+        const qreal score = undersize * 20.0 + emptyCells * 180.0 + sizeLoss + rows * 12.0;
+
+        if (score < bestScore) {
+            bestScore = score;
+            bestRows = rows;
+            bestColumns = columns;
+            bestCardSize = QSize(qMax(1, cardWidth), qMax(1, cardHeight));
+        }
+    }
+
+    lw->setGridSize(bestCardSize);
+    lw->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    lw->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    for (auto& info: windowList) {
+        auto title = info.title;
+        if (title.isEmpty())
+            title = Util::getFileDescription(info.exePath);
+        if (title.isEmpty())
+            title = "Window";
+
+        auto* item = new QListWidgetItem(info.icon, title);
+        item->setData(Qt::UserRole, QVariant::fromValue(info));
+        item->setData(PreviewAvailableRole, false);
+        item->setSizeHint(bestCardSize);
+        lw->addItem(item);
+    }
+
+    lw->setFixedSize(bestColumns * bestCardSize.width(), bestRows * bestCardSize.height());
     lw->doItemsLayout();
 
     QRect lwRect(QPoint(0, 0), lw->size());
@@ -516,9 +566,10 @@ bool Widget::prepareListWidget() {
     }
 
     qDebug() << "Prepared" << lw->count() << "window thumbnails on" << screen->name()
-             << "grid" << columns << "x" << rows;
+             << "grid" << bestColumns << "x" << bestRows << "card" << bestCardSize;
     return true;
 }
+
 bool Widget::requestShow() { // TODO 当前台是开始菜单（Win）时，会导致显示 但无法操控
     return prepareListWidget() && forceShow();
 }
@@ -566,9 +617,49 @@ QList<HWND> Widget::buildGroupWindowOrder(const QString& exePath) {
 }
 
 bool Widget::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == lw && event->type() == QEvent::Wheel) {
+    const bool isListSurface = watched == lw || watched == lw->viewport();
+
+    if (isListSurface && event->type() == QEvent::MouseButtonRelease) {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        QPoint pos = mouseEvent->position().toPoint();
+        if (watched == lw)
+            pos = lw->viewport()->mapFrom(lw, pos);
+
+        if (auto* item = lw->itemAt(pos)) {
+            const auto info = item->data(Qt::UserRole).value<WindowInfo>();
+            if (!info.hwnd || !IsWindow(info.hwnd))
+                return true;
+
+            if (mouseEvent->button() == Qt::LeftButton) {
+                lw->setCurrentItem(item);
+                pendingTargetWindow = nullptr;
+                Util::switchToWindow(info.hwnd);
+                hide();
+                return true;
+            }
+
+            if (mouseEvent->button() == Qt::MiddleButton) {
+                PostMessage(info.hwnd, WM_CLOSE, 0, 0);
+                QTimer::singleShot(120, this, [this] {
+                    if (!isVisible()) return;
+                    if (!prepareListWidget()) {
+                        hide();
+                        return;
+                    }
+                    lw->doItemsLayout();
+                    refreshThumbnails();
+                });
+                return true;
+            }
+        }
+    }
+
+    if (isListSurface && event->type() == QEvent::Wheel) {
         auto* wheelEvent = static_cast<QWheelEvent*>(event);
-        auto cursorPos = wheelEvent->position().toPoint();
+        QPoint cursorPos = wheelEvent->position().toPoint();
+        if (watched == lw)
+            cursorPos = lw->viewport()->mapFrom(lw, cursorPos);
+
         if (auto item = lw->itemAt(cursorPos)) {
             if (lw->currentItem() != item)
                 lw->setCurrentItem(item);
@@ -586,7 +677,9 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
 
             const auto targetExe = windowInfo.exePath;
             static bool isLastRollUp = true;
-            const bool isRollUp = wheelEvent->angleDelta().x() > 0;
+            const QPoint delta = wheelEvent->angleDelta();
+            const int wheelDelta = qAbs(delta.x()) >= qAbs(delta.y()) ? delta.x() : delta.y();
+            const bool isRollUp = wheelDelta > 0;
             if (groupWindowOrder.isEmpty())
                 groupWindowOrder = buildGroupWindowOrder(targetExe);
             if (groupWindowOrder.isEmpty()) return false;
@@ -619,6 +712,7 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
     }
     return false;
 }
+
 /// `forward`: true for restore, false for minimize
 void Widget::rotateTaskbarWindowInGroup(const QString& exePath, bool forward, int windows) {
     qDebug() << "(Taskbar)Wheel on:" << exePath << forward << windows;
