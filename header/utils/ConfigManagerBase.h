@@ -1,4 +1,4 @@
-﻿#ifndef WIN_SWITCHER_CONFIGMANAGERBASE_H
+#ifndef WIN_SWITCHER_CONFIGMANAGERBASE_H
 #define WIN_SWITCHER_CONFIGMANAGERBASE_H
 
 #include <QSettings>
@@ -32,6 +32,11 @@ public:
         // This function is called automatically from QSettings's destructor and by the event loop at regular intervals,
         // so you normally don't need to call it yourself.
         settings.sync();
+    }
+
+    void notifyConfigEdited() {
+        sync();
+        emit configEdited();
     }
 
     /// Edit config file with `notepad.exe` & emit `configEdited` signal when finished

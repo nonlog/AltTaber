@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.24)
 project(Win_Switcher VERSION 0.6.0)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -69,6 +69,8 @@ add_executable(Win_Switcher src/main.cpp
         header/utils/SystemTray.h
         header/utils/ConfigManager.h
         header/utils/ConfigManagerBase.h
+        src/SettingsDialog.cpp
+        header/SettingsDialog.h
         src/UpdateDialog.cpp
         header/UpdateDialog.h
         ui/UpdateDialog.ui
