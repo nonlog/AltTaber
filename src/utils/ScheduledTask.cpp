@@ -1,4 +1,4 @@
-﻿#include "utils/ScheduledTask.h"
+#include "utils/ScheduledTask.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -191,7 +191,10 @@ QString ScheduledTask::createTaskXml(const QString& exePath, const QString& desc
 
 bool ScheduledTask::runElevatedSelf(const QStringList& args) {
     const std::wstring executable = QDir::toNativeSeparators(qApp->applicationFilePath()).toStdWString();
-    QStringList quotedArgs;`r`n    for (const auto& arg: args)`r`n        quotedArgs << quoteCommandLineArg(arg);`r`n    const std::wstring parameters = quotedArgs.join(' ').toStdWString();
+    QStringList quotedArgs;
+    for (const auto& arg: args)
+        quotedArgs << quoteCommandLineArg(arg);
+    const std::wstring parameters = quotedArgs.join(' ').toStdWString();
 
     SHELLEXECUTEINFOW info{};
     info.cbSize = sizeof(info);
@@ -279,4 +282,3 @@ bool ScheduledTask::deleteTask(const QString& taskName, bool requestElevation) {
         return runElevatedSelf({"--startup-task-helper", "delete", taskName});
     return runSchtasks({"/delete", "/tn", taskName, "/f"});
 }
-
