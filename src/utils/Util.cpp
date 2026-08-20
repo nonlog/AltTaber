@@ -319,22 +319,17 @@ namespace Util {
     // about 2ms
     QList<HWND> listValidWindows() {
         qDebug() << "#List Valid Windows";
-        static const bool isUserAdmin = IsUserAnAdmin(); // 和 isProcessElevated(GetCurrentProcess()) 好像没区别？
         using namespace AppUtil;
         QList<HWND> list;
         const auto winList = Util::enumWindows();
         for (auto hwnd: winList) {
             if (!hwnd) continue;
-            // 忽略权限高于自身的窗口
-            if (!isUserAdmin && isWindowElevated(hwnd)) {
-                // 有什么必要忽略呢？ 采用LIMITED权限OpenProcess之后，（低权限模式下）确实能读取更多窗口的exe路径了（例如管理员窗口）
-                // 是好事吗？ No, 只是泡沫而已；看起来可以显示更多窗口，实则无法控制：ShowWindow()无法对更高权限窗口生效
-                // PostMessage可以，但是无法使用NOACTIVE版本，窗口必被激活
-                // 此时由于权限不足，Hook失效，无法进一步检测 Alt or 任务栏滚轮，导致非常鸡肋
-                // https://stackoverflow.com/questions/13468331/showwindow-function-doesnt-work-when-target-application-is-run-as-administrator
-                qDebug() << "#ignore elevated:" << hwnd << getWindowTitle(hwnd);
-                continue;
-            }
+            // Keep elevated windows in the switcher as well. A medium-integrity AltTaber can still
+            // enumerate them and DWM can usually render their thumbnails. Some actions may be
+            // rejected by UIPI, but hiding the window entirely is worse than exposing it and
+            // letting Windows enforce the operation.
+            if (isWindowElevated(hwnd))
+                qDebug() << "#include elevated:" << hwnd << getWindowTitle(hwnd);
 
             /* fix `isWindowCloaked()`之后，以下代码无用
             auto className = Util::getClassName(hwnd);
