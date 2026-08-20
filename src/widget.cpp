@@ -154,7 +154,6 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     // With an exact N*gridWidth size that silently wraps the last column and clips rows.
     lw->setFrameShape(QFrame::NoFrame);
     lw->setContentsMargins(0, 0, 0, 0);
-    lw->setViewportMargins(0, 0, 0, 0);
     lw->setIconSize({22, 22});
     lw->setGridSize({DesiredCardWidth, DesiredCardHeight});
     lw->setUniformItemSizes(true);
