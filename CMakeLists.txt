@@ -82,6 +82,7 @@ target_link_libraries(Win_Switcher
         Qt::Xml
         Qt::Network
         Dwmapi
+        RuntimeObject
 )
 
 # UpdateDialog uses Qt's private QZipReader API. The official Qt packages include these headers.
