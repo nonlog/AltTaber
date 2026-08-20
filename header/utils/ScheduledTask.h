@@ -1,13 +1,10 @@
 #ifndef SCHEDULEDTASK_H
 #define SCHEDULEDTASK_H
 
-#include <QPair>
 #include <QString>
+#include <QStringList>
 
 class ScheduledTask {
-    static QPair<QString, QString> queryAuthorUserId();
-    static QString createTaskXml(const QString& exePath, const QString& description,
-                                 bool asAdmin = true, int priority = 5);
     static bool runElevatedSelf(const QStringList& args);
 
 public:

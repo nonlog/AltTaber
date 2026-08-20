@@ -20,6 +20,7 @@ int main(int argc, char* argv[]) {
     QApplication a(argc, argv);
     QCoreApplication::setApplicationName("AltTaber");
     QCoreApplication::setApplicationVersion(ALTTABER_VERSION);
+    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
 
     // One-shot elevated helper for startup-task maintenance. This intentionally runs before
     // SingleApp so a normal AltTaber instance can remain active while UAC starts this helper.

@@ -1,24 +1,16 @@
 #include "utils/ScheduledTask.h"
 
 #include <QApplication>
-#include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
 #include <QProcess>
 #include <QRegularExpression>
-#include <QString>
-#include <QTemporaryFile>
 
 #include <windows.h>
 #include <shellapi.h>
 
 namespace {
-QString xmlEscape(const QString& value) {
-    return value.toHtmlEscaped();
-}
-
 QString quoteCommandLineArg(QString value) {
-    value.replace("\\", "\\\\");
     value.replace("\"", "\\\"");
     return '"' + value + '"';
 }
@@ -41,14 +33,16 @@ bool runSchtasks(const QStringList& args, QByteArray* stdoutData = nullptr,
         return false;
     }
     process.waitForFinished(-1);
+    const QByteArray stdOut = process.readAllStandardOutput();
+    const QByteArray stdErr = process.readAllStandardError();
     if (stdoutData)
-        *stdoutData = process.readAllStandardOutput();
+        *stdoutData = stdOut;
     if (stderrData)
-        *stderrData = process.readAllStandardError();
+        *stderrData = stdErr;
     const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
     if (!ok)
         qWarning() << "schtasks.exe failed" << args << process.exitCode()
-                   << QString::fromLocal8Bit(process.readAllStandardError());
+                   << QString::fromLocal8Bit(stdErr);
     return ok;
 }
 
@@ -113,82 +107,6 @@ bool commandMatchesCurrentApp(const QString& command) {
 }
 } // namespace
 
-QPair<QString, QString> ScheduledTask::queryAuthorUserId() {
-    const QString command = R"(
-        $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-        $author = $identity.Name
-        $sid = $identity.User.Value
-        Write-Output "$author`n$sid"
-    )";
-    QProcess process;
-    process.start("powershell.exe", QStringList() << "-NoProfile" << "-Command" << command);
-    process.waitForFinished(-1);
-
-    const auto output = process.readAllStandardOutput();
-    const auto list = QString::fromLocal8Bit(output).replace("\r\n", "\n").split('\n', Qt::SkipEmptyParts);
-    if (list.size() != 2) {
-        qWarning() << "Failed to query current user identity for scheduled task" << list;
-        return {};
-    }
-    return {list.at(0), list.at(1)};
-}
-
-QString ScheduledTask::createTaskXml(const QString& exePath, const QString& description,
-                                     bool asAdmin, int priority) {
-    const QString isoTime = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
-    const auto [author, userId] = queryAuthorUserId();
-    if (author.isEmpty() || userId.isEmpty())
-        return {};
-
-    return QString(R"xml(<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-    <RegistrationInfo>
-        <Date>%1</Date>
-        <Author>%2</Author>
-        <Description>%3</Description>
-    </RegistrationInfo>
-    <Triggers>
-        <LogonTrigger>
-            <Enabled>true</Enabled>
-        </LogonTrigger>
-    </Triggers>
-    <Principals>
-        <Principal id="Author">
-            <UserId>%4</UserId>
-            <LogonType>InteractiveToken</LogonType>
-            <RunLevel>%5</RunLevel>
-        </Principal>
-    </Principals>
-    <Settings>
-        <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-        <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-        <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-        <AllowHardTerminate>false</AllowHardTerminate>
-        <StartWhenAvailable>false</StartWhenAvailable>
-        <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-        <IdleSettings>
-            <StopOnIdleEnd>false</StopOnIdleEnd>
-            <RestartOnIdle>false</RestartOnIdle>
-        </IdleSettings>
-        <AllowStartOnDemand>true</AllowStartOnDemand>
-        <Enabled>true</Enabled>
-        <Hidden>false</Hidden>
-        <RunOnlyIfIdle>false</RunOnlyIfIdle>
-        <WakeToRun>false</WakeToRun>
-        <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
-        <Priority>%6</Priority>
-    </Settings>
-    <Actions Context="Author">
-        <Exec>
-            <Command>%7</Command>
-        </Exec>
-    </Actions>
-</Task>
-)xml").arg(xmlEscape(isoTime), xmlEscape(author), xmlEscape(description), xmlEscape(userId),
-           asAdmin ? QStringLiteral("HighestAvailable") : QStringLiteral("LeastPrivilege"),
-           QString::number(priority), xmlEscape(QDir::toNativeSeparators(exePath)));
-}
-
 bool ScheduledTask::runElevatedSelf(const QStringList& args) {
     const std::wstring executable = QDir::toNativeSeparators(qApp->applicationFilePath()).toStdWString();
     QStringList quotedArgs;
@@ -229,34 +147,15 @@ bool ScheduledTask::createTask(const QString& taskName, bool asAdmin, bool reque
                                 asAdmin ? "elevated" : "normal"});
     }
 
-    const auto xml = createTaskXml(qApp->applicationFilePath(),
-                                   asAdmin ? "AltTaber startup as Administrator" : "AltTaber startup",
-                                   asAdmin);
-    if (xml.isEmpty())
-        return false;
-
-    QTemporaryFile file(QDir::tempPath() + "/AltTaber-schtasks-XXXXXX.xml");
-    file.setAutoRemove(true);
-    if (!file.open()) {
-        qWarning() << "Failed to create temporary scheduled-task XML" << file.errorString();
-        return false;
-    }
-
-    QByteArray encoded;
-    encoded.reserve(2 + xml.size() * 2);
-    encoded.append(char(0xFF));
-    encoded.append(char(0xFE));
-    const auto* utf16 = reinterpret_cast<const char*>(xml.utf16());
-    encoded.append(utf16, xml.size() * 2);
-    if (file.write(encoded) != encoded.size()) {
-        qWarning() << "Failed to write scheduled-task XML" << file.errorString();
-        return false;
-    }
-    file.flush();
-    const QString xmlPath = QDir::toNativeSeparators(file.fileName());
-    file.close();
-
-    return runSchtasks({"/create", "/tn", taskName, "/xml", xmlPath, "/f"});
+    // Let Task Scheduler bind the logon trigger to the current user. This avoids fragile
+    // hand-authored XML while still producing InteractiveToken + HighestAvailable on Windows.
+    const QString runLevel = asAdmin ? QStringLiteral("highest") : QStringLiteral("limited");
+    const QString executable = QDir::toNativeSeparators(qApp->applicationFilePath());
+    return runSchtasks({"/create", "/tn", taskName,
+                        "/tr", executable,
+                        "/sc", "onlogon",
+                        "/rl", runLevel,
+                        "/f"});
 }
 
 bool ScheduledTask::taskExists(const QString& taskName) {
