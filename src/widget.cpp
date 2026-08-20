@@ -4,7 +4,6 @@
 #include <QDebug>
 #include <QWindow>
 #include <QScreen>
-#include "utils/setWindowBlur.h"
 #include <QPainter>
 #include <QPen>
 #include <QDateTime>
@@ -28,6 +27,7 @@
 
 namespace {
     constexpr int PreviewAvailableRole = Qt::UserRole + 1;
+    constexpr int CloseButtonPadding = 7;
     constexpr int DesiredCardWidth = 240;
     constexpr int DesiredCardHeight = 160;
     constexpr int MinimumCardWidth = 150;
@@ -62,6 +62,15 @@ namespace {
         return card.adjusted(PreviewInset, titleHeight + 3, -PreviewInset, -PreviewInset);
     }
 
+    QRect closeButtonRectForOption(const QStyleOptionViewItem& option) {
+        const auto card = cardRectForOption(option);
+        const int titleHeight = titleHeightForCard(card);
+        const int side = qBound(22, titleHeight - 7, 28);
+        return QRect(card.right() - side - CloseButtonPadding + 1,
+                     card.top() + (titleHeight - side) / 2,
+                     side, side);
+    }
+
     class WindowThumbnailDelegate final : public QStyledItemDelegate {
     public:
         using QStyledItemDelegate::QStyledItemDelegate;
@@ -75,7 +84,9 @@ namespace {
             const bool selected = option.state & QStyle::State_Selected;
             const auto card = cardRectForOption(option);
             const auto preview = previewRectForOption(option);
+            const auto closeButton = closeButtonRectForOption(option);
             const int titleHeight = titleHeightForCard(card);
+            const bool hovered = option.state & QStyle::State_MouseOver;
 
             const QColor cardFill = dark ? QColor(48, 48, 48, 232) : QColor(255, 255, 255, 226);
             const QColor selectedFill = dark ? QColor(58, 58, 58, 244) : QColor(255, 255, 255, 246);
@@ -96,8 +107,9 @@ namespace {
             if (!icon.isNull())
                 icon.paint(painter, iconRect, Qt::AlignCenter, QIcon::Normal);
 
+            const int textRight = (selected || hovered) ? closeButton.left() - 7 : card.right() - 10;
             QRect textRect(iconRect.right() + 8, card.top(),
-                           card.right() - iconRect.right() - 16,
+                           qMax(10, textRight - iconRect.right() - 8),
                            titleHeight);
             auto font = option.font;
             if (font.pointSizeF() < 9.0)
@@ -108,6 +120,21 @@ namespace {
             const auto title = fm.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight,
                                              textRect.width());
             painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, title);
+
+            // Windows 11 exposes a close button on the active/hovered Alt+Tab card.
+            if (selected || hovered) {
+                const QColor closeFill = dark ? QColor(255, 255, 255, 18) : QColor(0, 0, 0, 12);
+                const QColor closeStroke = dark ? QColor(245, 245, 245) : QColor(45, 45, 45);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(closeFill);
+                painter->drawRoundedRect(closeButton, 5, 5);
+
+                painter->setPen(QPen(closeStroke, 1.35, Qt::SolidLine, Qt::RoundCap));
+                const QPoint c = closeButton.center();
+                const int d = qBound(4, closeButton.width() / 5, 5);
+                painter->drawLine(c + QPoint(-d, -d), c + QPoint(d, d));
+                painter->drawLine(c + QPoint(d, -d), c + QPoint(-d, d));
+            }
 
             painter->setPen(QPen(dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 20), 1));
             painter->setBrush(previewFill);
@@ -138,8 +165,14 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     QtWin::taskbarDeleteTab(this); //删除任务栏图标
     setWindowTitle("AltTaber");
 
-    Util::setWindowRoundCorner(this->hWnd()); // 设置窗口圆角
-    setWindowBlur(hWnd()); // 设置窗口模糊, 必须配合Qt::WA_TranslucentBackground
+    Util::setWindowRoundCorner(this->hWnd()); // let DWM clip the native window corners
+#ifdef Q_OS_WIN
+    // The legacy BlurBehind path paints the whole rectangular HWND, so it leaks through
+    // the transparent Qt corners. Disable the native 1px border too; Qt paints the shell.
+    const COLORREF noBorder = 0xFFFFFFFE; // DWMWA_COLOR_NONE
+    DwmSetWindowAttribute(hWnd(), static_cast<DWMWINDOWATTRIBUTE>(34),
+                          &noBorder, sizeof(noBorder)); // DWMWA_BORDER_COLOR
+#endif
 
     setupLabelFont();
     ui->label->hide();
@@ -171,6 +204,7 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setItemDelegate(new WindowThumbnailDelegate(lw));
     lw->installEventFilter(this);
     lw->viewport()->installEventFilter(this);
+    lw->setMouseTracking(true);
     lw->viewport()->setMouseTracking(true);
 
     connect(lw, &QListWidget::currentItemChanged, this, [this](QListWidgetItem*, QListWidgetItem*) {
@@ -663,16 +697,8 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
             if (!info.hwnd || !IsWindow(info.hwnd))
                 return true;
 
-            if (mouseEvent->button() == Qt::LeftButton) {
-                lw->setCurrentItem(item);
-                pendingTargetWindow = nullptr;
-                Util::switchToWindow(info.hwnd);
-                hide();
-                return true;
-            }
-
-            if (mouseEvent->button() == Qt::MiddleButton) {
-                PostMessage(info.hwnd, WM_CLOSE, 0, 0);
+            auto closeWindow = [this](HWND hwnd) {
+                PostMessage(hwnd, WM_CLOSE, 0, 0);
                 QTimer::singleShot(120, this, [this] {
                     if (!isVisible()) return;
                     if (!prepareListWidget()) {
@@ -682,6 +708,25 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
                     lw->doItemsLayout();
                     refreshThumbnails();
                 });
+            };
+
+            if (mouseEvent->button() == Qt::LeftButton) {
+                QStyleOptionViewItem option;
+                option.rect = lw->visualItemRect(item);
+                if (closeButtonRectForOption(option).contains(pos)) {
+                    closeWindow(info.hwnd);
+                    return true;
+                }
+
+                lw->setCurrentItem(item);
+                pendingTargetWindow = nullptr;
+                Util::switchToWindow(info.hwnd);
+                hide();
+                return true;
+            }
+
+            if (mouseEvent->button() == Qt::MiddleButton) {
+                closeWindow(info.hwnd);
                 return true;
             }
         }
