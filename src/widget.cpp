@@ -14,6 +14,7 @@
 #include <QMouseEvent>
 #include <QStyleHints>
 #include <QSettings>
+#include <QSet>
 #include <QFrame>
 #include <QtMath>
 #include <limits>
@@ -28,10 +29,10 @@
 namespace {
     constexpr int PreviewAvailableRole = Qt::UserRole + 1;
     constexpr int CloseButtonPadding = 7;
-    constexpr int DesiredCardWidth = 240;
-    constexpr int DesiredCardHeight = 160;
-    constexpr int MinimumCardWidth = 150;
-    constexpr int MinimumCardHeight = 100;
+    constexpr int DesiredCardWidth = 280;
+    constexpr int DesiredCardHeight = 186;
+    constexpr int MinimumCardWidth = 168;
+    constexpr int MinimumCardHeight = 112;
     constexpr int CardInset = 4;
     constexpr int PreviewInset = 8;
 
@@ -49,7 +50,7 @@ namespace {
     }
 
     int titleHeightForCard(const QRect& card) {
-        return qBound(30, card.height() / 5, 38);
+        return qBound(34, card.height() / 5, 42);
     }
 
     QRect cardRectForOption(const QStyleOptionViewItem& option) {
@@ -102,7 +103,7 @@ namespace {
             painter->drawRoundedRect(card, 10, 10);
 
             const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
-            const int iconSize = qBound(18, titleHeight - 14, 22);
+            const int iconSize = qBound(20, titleHeight - 14, 24);
             QRect iconRect(card.left() + 11, card.top() + (titleHeight - iconSize) / 2, iconSize, iconSize);
             if (!icon.isNull())
                 icon.paint(painter, iconRect, Qt::AlignCenter, QIcon::Normal);
@@ -112,8 +113,6 @@ namespace {
                            qMax(10, textRight - iconRect.right() - 8),
                            titleHeight);
             auto font = option.font;
-            if (font.pointSizeF() < 9.0)
-                font.setPointSizeF(9.0);
             painter->setFont(font);
             painter->setPen(textColor);
             const QFontMetrics fm(font);
@@ -448,8 +447,29 @@ void Widget::notifyForegroundChanged(HWND hwnd, ForegroundChangeSource source) {
 /// collect, filter, and sort individual windows for the Alt+Tab view
 QList<WindowInfo> Widget::prepareWindowList() {
     QList<WindowInfo> windows;
-    const auto list = Util::listValidWindows();
+    auto list = Util::listValidWindows();
     const auto foreground = GetForegroundWindow();
+
+    // Some Flutter/desktop apps briefly clear WS_VISIBLE during focus transitions. If such a
+    // window was a foreground window moments ago, keep it in this Alt+Tab snapshot. The relaxed
+    // acceptance check still applies all other task-window rules, and the short time window avoids
+    // surfacing ordinary tray/background windows that have been hidden for a long time.
+    QSet<HWND> seen;
+    for (auto hwnd: list)
+        seen.insert(hwnd);
+    const auto recentCutoff = QDateTime::currentDateTime().addSecs(-5);
+    for (auto appIt = winActiveOrder.cbegin(); appIt != winActiveOrder.cend(); ++appIt) {
+        for (auto winIt = appIt.value().cbegin(); winIt != appIt.value().cend(); ++winIt) {
+            const HWND hwnd = winIt.key();
+            if (seen.contains(hwnd) || winIt.value() < recentCutoff || !IsWindow(hwnd))
+                continue;
+            if (!Util::isWindowAcceptable(hwnd, true))
+                continue;
+            qDebug() << "#include recent hidden window:" << hwnd << Util::getWindowTitle(hwnd);
+            list.append(hwnd);
+            seen.insert(hwnd);
+        }
+    }
 
     for (auto hwnd: list) {
         if (!hwnd || hwnd == this->hWnd()) continue;
@@ -538,8 +558,8 @@ bool Widget::prepareListWidget() {
     }
 
     const auto available = screen->availableGeometry();
-    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.90) - ListWidgetMargin.left() - ListWidgetMargin.right());
-    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.78) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
+    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.92) - ListWidgetMargin.left() - ListWidgetMargin.right());
+    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.82) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
     const int count = windowList.size();
     constexpr qreal CardAspect = qreal(DesiredCardWidth) / qreal(DesiredCardHeight);
 

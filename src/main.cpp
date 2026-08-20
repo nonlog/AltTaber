@@ -1,9 +1,10 @@
-﻿#include <QApplication>
+#include <QApplication>
 #include <windows.h>
 #include <QTimer>
 #include <QMessageBox>
 #include <qoperatingsystemversion.h>
 #include <QStyleHints>
+#include <QSettings>
 #include "UpdateDialog.h"
 #include "widget.h"
 #include "utils/winEventHook.h"
@@ -33,9 +34,14 @@ int main(int argc, char* argv[]) {
     qDebug() << "System Version" << QOperatingSystemVersion::current().version();
     sysTray.show(); // show之后才能使用系统通知
     UpdateDialog::verifyUpdate(a); // 验证更新
-
-    // 默认情况下，会根据系统主题自动切换; 但是一旦自定义qss，自动切换就会失效; 只好固定为Dark/Light
-    QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
+    // Keep Qt widgets in sync with the Windows app theme. The switcher itself also reads this
+    // registry value directly, so native controls and our custom-painted cards use one theme.
+    QSettings personalize(
+        R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)",
+        QSettings::NativeFormat);
+    const bool useLightTheme = personalize.value("AppsUseLightTheme", 1).toInt() != 0;
+    QApplication::styleHints()->setColorScheme(useLightTheme ? Qt::ColorScheme::Light
+                                                              : Qt::ColorScheme::Dark);
     qApp->setQuitOnLastWindowClosed(false);
     auto* winSwitcher = new Widget;
     winSwitcher->prepareListWidget(); // 优化：对ListWidget进行预先初始化，首次执行`setCurrentRow`特别耗时(472ms)

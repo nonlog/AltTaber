@@ -8,6 +8,7 @@ class QComboBox;
 class QFontComboBox;
 class QSpinBox;
 class QPushButton;
+class QLabel;
 class QShowEvent;
 
 class SettingsDialog final : public QDialog {
@@ -23,12 +24,14 @@ private:
     void loadSettings();
     void saveSettings();
     void updateApplyState();
+    void updateFontPreview();
     void openConfigFile();
 
     QCheckBox* startupCheck{};
     QComboBox* monitorCombo{};
     QFontComboBox* fontCombo{};
     QSpinBox* fontSizeSpin{};
+    QLabel* fontPreview{};
     QPushButton* applyButton{};
     bool loading{false};
 };
