@@ -3,10 +3,11 @@
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QString>
 #include <QTemporaryFile>
-#include <QXmlStreamReader>
 
 #include <windows.h>
 #include <shellapi.h>
@@ -16,70 +17,33 @@ QString xmlEscape(const QString& value) {
     return value.toHtmlEscaped();
 }
 
-QString quoteCommandLineArg(QString value) {
-    value.replace('"', R"(\")");
-    return '"' + value + '"';
+QString xmlUnescape(QString value) {
+    value.replace("&quot;", "\"");
+    value.replace("&apos;", "'");
+    value.replace("&lt;", "<");
+    value.replace("&gt;", ">");
+    value.replace("&amp;", "&");
+    return value;
 }
 
-bool runSchtasks(const QStringList& args, bool elevated, QByteArray* stdoutData = nullptr,
+bool runSchtasks(const QStringList& args, QByteArray* stdoutData = nullptr,
                  QByteArray* stderrData = nullptr) {
-    if (!elevated) {
-        QProcess process;
-        process.start("schtasks.exe", args);
-        if (!process.waitForStarted()) {
-            qWarning() << "Failed to start schtasks.exe" << process.errorString();
-            return false;
-        }
-        process.waitForFinished(-1);
-        if (stdoutData)
-            *stdoutData = process.readAllStandardOutput();
-        if (stderrData)
-            *stderrData = process.readAllStandardError();
-        const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
-        if (!ok)
-            qWarning() << "schtasks.exe failed" << args << process.exitCode()
-                       << QString::fromLocal8Bit(process.readAllStandardError());
-        return ok;
-    }
-
-    QStringList quoted;
-    quoted.reserve(args.size());
-    for (const auto& arg: args)
-        quoted << quoteCommandLineArg(arg);
-    const std::wstring parameters = quoted.join(' ').toStdWString();
-
-    wchar_t systemDir[MAX_PATH]{};
-    const UINT systemDirLen = GetSystemDirectoryW(systemDir, MAX_PATH);
-    const QString schtasksPath = systemDirLen > 0
-        ? QDir::toNativeSeparators(QString::fromWCharArray(systemDir) + "/schtasks.exe")
-        : QStringLiteral("schtasks.exe");
-    const std::wstring executable = schtasksPath.toStdWString();
-
-    SHELLEXECUTEINFOW info{};
-    info.cbSize = sizeof(info);
-    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-    info.hwnd = nullptr;
-    info.lpVerb = L"runas";
-    info.lpFile = executable.c_str();
-    info.lpParameters = parameters.c_str();
-    info.nShow = SW_HIDE;
-
-    if (!ShellExecuteExW(&info)) {
-        const DWORD error = GetLastError();
-        if (error == ERROR_CANCELLED)
-            qWarning() << "Elevation request cancelled by user";
-        else
-            qWarning() << "ShellExecuteExW(schtasks.exe) failed" << error;
+    QProcess process;
+    process.start("schtasks.exe", args);
+    if (!process.waitForStarted()) {
+        qWarning() << "Failed to start schtasks.exe" << process.errorString();
         return false;
     }
-
-    WaitForSingleObject(info.hProcess, INFINITE);
-    DWORD exitCode = ERROR_GEN_FAILURE;
-    GetExitCodeProcess(info.hProcess, &exitCode);
-    CloseHandle(info.hProcess);
-    if (exitCode != 0)
-        qWarning() << "Elevated schtasks.exe failed with exit code" << exitCode;
-    return exitCode == 0;
+    process.waitForFinished(-1);
+    if (stdoutData)
+        *stdoutData = process.readAllStandardOutput();
+    if (stderrData)
+        *stderrData = process.readAllStandardError();
+    const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    if (!ok)
+        qWarning() << "schtasks.exe failed" << args << process.exitCode()
+                   << QString::fromLocal8Bit(process.readAllStandardError());
+    return ok;
 }
 
 QString decodeOutput(const QByteArray& bytes) {
@@ -93,31 +57,56 @@ QString decodeOutput(const QByteArray& bytes) {
 
 QString queryTaskXml(const QString& taskName) {
     QByteArray output;
-    if (!runSchtasks({"/query", "/tn", taskName, "/xml"}, false, &output))
+    if (!runSchtasks({"/query", "/tn", taskName, "/xml"}, &output))
         return {};
     return decodeOutput(output);
 }
 
-QPair<QString, QString> readTaskCommandAndRunLevel(const QString& taskXml) {
+struct TaskInfo {
     QString command;
     QString runLevel;
-    QXmlStreamReader xml(taskXml);
-    while (!xml.atEnd()) {
-        xml.readNext();
-        if (!xml.isStartElement())
-            continue;
-        if (xml.name() == QStringLiteral("Command"))
-            command = xml.readElementText().trimmed();
-        else if (xml.name() == QStringLiteral("RunLevel"))
-            runLevel = xml.readElementText().trimmed();
-    }
-    if (xml.hasError())
-        qWarning() << "Failed to parse scheduled task XML" << xml.errorString();
-    return {command, runLevel};
-}
+};
+
+TaskInfo readTaskInfo(const QString& taskXml) {
+    TaskInfo info;
+    if (taskXml.isEmpty())
+        return info;
+
+    static const QRegularExpression commandRe(
+        R"(<Command>\s*([^<]*?)\s*</Command>)",
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression runLevelRe(
+        R"(<RunLevel>\s*([^<]*?)\s*</RunLevel>)",
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+
+    const auto commandMatch = commandRe.match(taskXml);
+    if (commandMatch.hasMatch())
+        info.command = xmlUnescape(commandMatch.captured(1).trimmed());
+    const auto runLevelMatch = runLevelRe.match(taskXml);
+    if (runLevelMatch.hasMatch())
+        info.runLevel = runLevelMatch.captured(1).trimmed();
+    return info;
 }
 
-/// Query Author and User ID via PowerShell for schtasks.exe XML.
+QString normalizedPath(QString path) {
+    path = path.trimmed();
+    if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.mid(1, path.size() - 2);
+    return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));
+}
+
+bool commandMatchesCurrentApp(const QString& command) {
+    if (command.isEmpty())
+        return false;
+    const QString actual = normalizedPath(command);
+    const QString expected = normalizedPath(qApp->applicationFilePath());
+    const bool matches = actual.compare(expected, Qt::CaseInsensitive) == 0;
+    if (!matches)
+        qWarning() << "Scheduled task path mismatch" << actual << expected;
+    return matches;
+}
+} // namespace
+
 QPair<QString, QString> ScheduledTask::queryAuthorUserId() {
     const QString command = R"(
         $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -138,8 +127,6 @@ QPair<QString, QString> ScheduledTask::queryAuthorUserId() {
     return {list.at(0), list.at(1)};
 }
 
-// Start at user logon. XML is used because schtasks.exe's command-line form defaults to a
-// below-normal task priority; this keeps AltTaber at normal interactive priority.
 QString ScheduledTask::createTaskXml(const QString& exePath, const QString& description,
                                      bool asAdmin, int priority) {
     const QString isoTime = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
@@ -196,7 +183,43 @@ QString ScheduledTask::createTaskXml(const QString& exePath, const QString& desc
            QString::number(priority), xmlEscape(QDir::toNativeSeparators(exePath)));
 }
 
+bool ScheduledTask::runElevatedSelf(const QStringList& args) {
+    const std::wstring executable = QDir::toNativeSeparators(qApp->applicationFilePath()).toStdWString();
+    const std::wstring parameters = QProcess::joinCommand(args).toStdWString();
+
+    SHELLEXECUTEINFOW info{};
+    info.cbSize = sizeof(info);
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.hwnd = nullptr;
+    info.lpVerb = L"runas";
+    info.lpFile = executable.c_str();
+    info.lpParameters = parameters.c_str();
+    info.nShow = SW_HIDE;
+
+    if (!ShellExecuteExW(&info)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_CANCELLED)
+            qWarning() << "Elevation request cancelled by user";
+        else
+            qWarning() << "Failed to launch elevated AltTaber helper" << error;
+        return false;
+    }
+
+    WaitForSingleObject(info.hProcess, INFINITE);
+    DWORD exitCode = ERROR_GEN_FAILURE;
+    GetExitCodeProcess(info.hProcess, &exitCode);
+    CloseHandle(info.hProcess);
+    if (exitCode != 0)
+        qWarning() << "Elevated AltTaber startup helper failed" << exitCode;
+    return exitCode == 0;
+}
+
 bool ScheduledTask::createTask(const QString& taskName, bool asAdmin, bool requestElevation) {
+    if (requestElevation) {
+        return runElevatedSelf({"--startup-task-helper", "create", taskName,
+                                asAdmin ? "elevated" : "normal"});
+    }
+
     const auto xml = createTaskXml(qApp->applicationFilePath(),
                                    asAdmin ? "AltTaber startup as Administrator" : "AltTaber startup",
                                    asAdmin);
@@ -210,7 +233,6 @@ bool ScheduledTask::createTask(const QString& taskName, bool asAdmin, bool reque
         return false;
     }
 
-    // Match the XML declaration and Windows Task Scheduler's preferred encoding.
     QByteArray encoded;
     encoded.reserve(2 + xml.size() * 2);
     encoded.append(char(0xFF));
@@ -225,39 +247,29 @@ bool ScheduledTask::createTask(const QString& taskName, bool asAdmin, bool reque
     const QString xmlPath = QDir::toNativeSeparators(file.fileName());
     file.close();
 
-    const bool ok = runSchtasks({"/create", "/tn", taskName, "/xml", xmlPath, "/f"}, requestElevation);
-    return ok && queryTask(taskName) && (!asAdmin || queryTaskRunsElevated(taskName));
+    return runSchtasks({"/create", "/tn", taskName, "/xml", xmlPath, "/f"});
 }
 
 bool ScheduledTask::taskExists(const QString& taskName) {
     QByteArray output;
-    return runSchtasks({"/query", "/tn", taskName}, false, &output);
+    return runSchtasks({"/query", "/tn", taskName}, &output);
 }
 
 bool ScheduledTask::queryTask(const QString& taskName) {
-    const auto [command, runLevel] = readTaskCommandAndRunLevel(queryTaskXml(taskName));
-    if (command.isEmpty())
-        return false;
-
-    const QString expected = QDir::toNativeSeparators(qApp->applicationFilePath());
-    const bool matches = QDir::toNativeSeparators(command).compare(expected, Qt::CaseInsensitive) == 0;
-    if (!matches)
-        qWarning() << "Scheduled task path mismatch" << command << expected;
-    Q_UNUSED(runLevel);
-    return matches;
+    const auto info = readTaskInfo(queryTaskXml(taskName));
+    return commandMatchesCurrentApp(info.command);
 }
 
 bool ScheduledTask::queryTaskRunsElevated(const QString& taskName) {
-    const auto [command, runLevel] = readTaskCommandAndRunLevel(queryTaskXml(taskName));
-    if (command.isEmpty())
-        return false;
-    const QString expected = QDir::toNativeSeparators(qApp->applicationFilePath());
-    return QDir::toNativeSeparators(command).compare(expected, Qt::CaseInsensitive) == 0 &&
-           runLevel.compare(QStringLiteral("HighestAvailable"), Qt::CaseInsensitive) == 0;
+    const auto info = readTaskInfo(queryTaskXml(taskName));
+    return commandMatchesCurrentApp(info.command) &&
+           info.runLevel.compare(QStringLiteral("HighestAvailable"), Qt::CaseInsensitive) == 0;
 }
 
 bool ScheduledTask::deleteTask(const QString& taskName, bool requestElevation) {
     if (!taskExists(taskName))
         return true;
-    return runSchtasks({"/delete", "/tn", taskName, "/f"}, requestElevation);
+    if (requestElevation)
+        return runElevatedSelf({"--startup-task-helper", "delete", taskName});
+    return runSchtasks({"/delete", "/tn", taskName, "/f"});
 }

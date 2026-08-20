@@ -17,11 +17,15 @@
 
 #include "utils/ConfigManager.h"
 #include "utils/Startup.h"
+#include "utils/QtWin.h"
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setWindowTitle(tr("AltTaber Settings"));
     setWindowIcon(QIcon(":/img/icon.ico"));
     setModal(false);
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAutoFillBackground(false);
     resize(580, 470);
     setMinimumSize(540, 440);
 
@@ -124,6 +128,11 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
 
 void SettingsDialog::showEvent(QShowEvent* event) {
     QDialog::showEvent(event);
+    QSettings personalize(
+        R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize)",
+        QSettings::NativeFormat);
+    const bool dark = personalize.value("AppsUseLightTheme", 1).toInt() == 0;
+    QtWin::applyMicaAlt(this, dark);
     loadSettings();
 }
 

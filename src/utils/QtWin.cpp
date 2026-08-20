@@ -1,6 +1,7 @@
-﻿#include <ShObjIdl_core.h>
+#include <ShObjIdl_core.h>
 #include "utils/QtWin.h"
 #include <windows.h>
+#include <dwmapi.h>
 #include <QtDebug>
 
 namespace QtWin {
@@ -29,5 +30,29 @@ namespace QtWin {
     /// new implementation for Qt6
     QPixmap fromHICON(HICON icon) {
         return QPixmap::fromImage(QImage::fromHICON(icon));
+    }
+
+    bool applyMicaAlt(QWidget* window, bool darkMode) {
+        if (!window)
+            return false;
+        const HWND hwnd = reinterpret_cast<HWND>(window->winId());
+        if (!hwnd)
+            return false;
+
+        const BOOL dark = darkMode ? TRUE : FALSE;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+
+        const DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_TABBEDWINDOW;
+        const HRESULT backdropHr = DwmSetWindowAttribute(
+            hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+
+        const DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+
+        // Extend DWM rendering through the full client area. The top-level Qt window stays
+        // non-layered/non-translucent; DWM itself paints the opaque Mica Alt material.
+        const MARGINS margins{-1, -1, -1, -1};
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
+        return SUCCEEDED(backdropHr);
     }
 } // QtWin

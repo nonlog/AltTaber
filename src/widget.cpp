@@ -183,17 +183,18 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw = ui->listWidget;
     setWindowFlag(Qt::WindowStaysOnTopHint);
     setWindowFlag(Qt::FramelessWindowHint);
-    setAttribute(Qt::WA_TranslucentBackground); //设置窗口背景透明 !但是会造成show()时的闪烁 和 绘制延迟(?)
+    // Mica Alt is an opaque DWM backdrop. Do not use a layered/per-pixel translucent Qt window.
+    setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_NoSystemBackground, true);
+    setAutoFillBackground(false);
     QtWin::taskbarDeleteTab(this); //删除任务栏图标
     setWindowTitle("AltTaber");
 
-    Util::setWindowRoundCorner(this->hWnd()); // let DWM clip the native window corners
+    Util::setWindowRoundCorner(this->hWnd());
 #ifdef Q_OS_WIN
-    // The legacy BlurBehind path paints the whole rectangular HWND, so it leaks through
-    // the transparent Qt corners. Disable the native 1px border too; Qt paints the shell.
     const COLORREF noBorder = 0xFFFFFFFE; // DWMWA_COLOR_NONE
-    DwmSetWindowAttribute(hWnd(), static_cast<DWMWINDOWATTRIBUTE>(34),
-                          &noBorder, sizeof(noBorder)); // DWMWA_BORDER_COLOR
+    DwmSetWindowAttribute(hWnd(), DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
+    QtWin::applyMicaAlt(this, useDarkPalette());
 #endif
 
     setupLabelFont();
@@ -339,16 +340,8 @@ void Widget::keyReleaseEvent(QKeyEvent* event) {
     QWidget::keyReleaseEvent(event);
 }
 void Widget::paintEvent(QPaintEvent*) {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing);
-
-    const bool dark = useDarkPalette();
-    const QColor fill = dark ? QColor(32, 32, 32, 205) : QColor(248, 248, 248, 205);
-    const QColor border = dark ? QColor(255, 255, 255, 30) : QColor(0, 0, 0, 24);
-
-    painter.setPen(QPen(border, 1));
-    painter.setBrush(fill);
-    painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 13, 13);
+    // Intentionally do not paint an outer translucent shell. DWM owns the full-window
+    // Mica Alt backdrop; the item delegate paints only the cards/content above it.
 }
 
 void Widget::hideEvent(QHideEvent* event) {

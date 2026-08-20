@@ -14,11 +14,30 @@
 #include "utils/ComInitializer.h"
 #include "utils/SingleApp.h"
 #include "utils/SystemTray.h"
+#include "utils/ScheduledTask.h"
 
 int main(int argc, char* argv[]) {
     QApplication a(argc, argv);
     QCoreApplication::setApplicationName("AltTaber");
     QCoreApplication::setApplicationVersion(ALTTABER_VERSION);
+
+    // One-shot elevated helper for startup-task maintenance. This intentionally runs before
+    // SingleApp so a normal AltTaber instance can remain active while UAC starts this helper.
+    const auto appArgs = a.arguments();
+    if (appArgs.size() >= 4 && appArgs.at(1) == "--startup-task-helper") {
+        if (!IsUserAnAdmin())
+            return 20;
+        const QString operation = appArgs.at(2);
+        const QString taskName = appArgs.at(3);
+        bool ok = false;
+        if (operation == "create") {
+            const bool elevated = appArgs.size() >= 5 && appArgs.at(4) == "elevated";
+            ok = ScheduledTask::createTask(taskName, elevated, false);
+        } else if (operation == "delete") {
+            ok = ScheduledTask::deleteTask(taskName, false);
+        }
+        return ok ? 0 : 21;
+    }
     SingleApp singleApp("AltTaber-MrBeanCpp");
     if (singleApp.isRunning()) {
         qWarning() << "Another instance is running! Exit";
