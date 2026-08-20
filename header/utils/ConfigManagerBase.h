@@ -1,8 +1,9 @@
-#ifndef WIN_SWITCHER_CONFIGMANAGERBASE_H
+﻿#ifndef WIN_SWITCHER_CONFIGMANAGERBASE_H
 #define WIN_SWITCHER_CONFIGMANAGERBASE_H
 
 #include <QSettings>
 #include <QProcess>
+#include <QFile>
 
 class ConfigManagerBase : public QObject {
     Q_OBJECT
@@ -73,3 +74,4 @@ signals:
 
 
 #endif //WIN_SWITCHER_CONFIGMANAGERBASE_H
+
