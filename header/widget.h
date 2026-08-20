@@ -4,7 +4,10 @@
 #include <QWidget>
 #include <Windows.h>
 #include <QListWidget>
+#include <QDateTime>
+#include <QIcon>
 #include <QDebug>
+#include <dwmapi.h>
 
 struct WindowGroup;
 
@@ -12,6 +15,8 @@ struct WindowInfo {
     QString title;
     QString className;
     HWND hwnd = nullptr;
+    QString exePath;
+    QIcon icon;
 };
 
 // C++17 inline: 防止重定义
@@ -50,6 +55,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 public:
     enum ForegroundChangeSource {
@@ -61,6 +67,7 @@ public:
 
 public:
     explicit Widget(QWidget* parent = nullptr);
+    QList<WindowInfo> prepareWindowList();
     QList<WindowGroup> prepareWindowGroupList();
     bool prepareListWidget();
     Q_INVOKABLE bool requestShow();
@@ -77,8 +84,10 @@ public:
 
 private:
     bool forceShow();
-    void showLabelForItem(QListWidgetItem* item, QString text = QString());
     void setupLabelFont();
+    void clearThumbnails();
+    void refreshThumbnails();
+    QRect previewRectForItem(QListWidgetItem* item) const;
     auto getLastActiveGroupWindow(const QString& exePath) -> QPair<HWND, QDateTime>;
     auto getLastValidActiveGroupWindow(const WindowGroup& group) -> QPair<HWND, QDateTime>;
     void sortGroupWindows(QList<HWND>& windows, const QString& exePath);
@@ -87,13 +96,20 @@ private:
     static HWND rotateNormalWindowInGroup(const QList<HWND>& windows, HWND current, bool forward = true);
 
 private:
+    struct RegisteredThumbnail {
+        HTHUMBNAIL handle = nullptr;
+        HWND source = nullptr;
+        QListWidgetItem* item = nullptr;
+    };
+
     Ui::Widget* ui;
     QListWidget* lw = nullptr;
     const QMargins ListWidgetMargin{24, 24, 24, 24};
     /// exePath -> (HWND, time)
     QHash<QString, QHash<HWND, QDateTime>> winActiveOrder;
     QList<HWND> groupWindowOrder; // for Alt+` 同组窗口切换
+    QList<RegisteredThumbnail> thumbnails;
+    HWND pendingTargetWindow = nullptr;
 };
-
 
 #endif //WIN_SWITCHER_WIDGET_H

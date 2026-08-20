@@ -39,7 +39,7 @@ protected:
 private:
     Ui::UpdateDialog* ui;
     QNetworkAccessManager manager;
-    static constexpr auto Owner = "MrBeanCpp";
+    static constexpr auto Owner = "nonlog";
     static constexpr auto Repo = "AltTaber";
     const QVersionNumber version = normalizeVersion(QApplication::applicationVersion());
 
@@ -61,6 +61,5 @@ private:
         const QString extractDir = "_extract";
     } archive;
 };
-
 
 #endif //WIN_SWITCHER_UPDATEDIALOG_H

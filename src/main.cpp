@@ -16,6 +16,8 @@
 
 int main(int argc, char* argv[]) {
     QApplication a(argc, argv);
+    QCoreApplication::setApplicationName("AltTaber");
+    QCoreApplication::setApplicationVersion(ALTTABER_VERSION);
     SingleApp singleApp("AltTaber-MrBeanCpp");
     if (singleApp.isRunning()) {
         qWarning() << "Another instance is running! Exit";
