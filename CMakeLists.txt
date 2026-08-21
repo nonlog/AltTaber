@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(Win_Switcher VERSION 0.6.1)
+project(Win_Switcher VERSION 0.6.2)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,12 +33,16 @@ include_directories(header)
 
 find_package(Qt6 COMPONENTS
         Core
-        CorePrivate
         Gui
         Widgets
         Xml
         Network
         REQUIRED)
+
+# Packaged Qt distributions do not expose private modules consistently.  MSYS2
+# provides Qt6::CorePrivate as a separate target, while the official Windows
+# Qt package exposes the private headers through the Core include variables.
+find_package(Qt6CorePrivate QUIET)
 
 add_executable(Win_Switcher src/main.cpp
         ${VERSIONINFO_RC}
@@ -80,7 +84,6 @@ add_executable(Win_Switcher src/main.cpp
 
 target_link_libraries(Win_Switcher
         Qt::Core
-        Qt::CorePrivate
         Qt::Gui
         Qt::Widgets
         Qt::Xml
@@ -90,8 +93,16 @@ target_link_libraries(Win_Switcher
         RuntimeObject
 )
 
-# UpdateDialog uses Qt's private QZipReader API. Qt::CorePrivate supplies the
-# matching private include paths for both MSVC and MinGW Qt packages.
+# UpdateDialog uses Qt's private QZipReader API.  Prefer the private target
+# where a package supplies it; otherwise retain the official Qt include-dir
+# fallback used by the MSVC release workflow.
+if(TARGET Qt6::CorePrivate)
+    target_link_libraries(Win_Switcher Qt::CorePrivate)
+else()
+    target_include_directories(${PROJECT_NAME} PRIVATE
+            ${Qt6Core_PRIVATE_INCLUDE_DIRS}
+            ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+endif()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "AltTaber")
 if(CMAKE_BUILD_TYPE MATCHES "Release")
