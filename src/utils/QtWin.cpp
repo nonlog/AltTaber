@@ -1,4 +1,4 @@
-#include <ShObjIdl_core.h>
+#include <shobjidl.h>
 #include "utils/QtWin.h"
 #include <windows.h>
 #include <dwmapi.h>

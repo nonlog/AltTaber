@@ -5,7 +5,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QSettings>
-#include <shlobj_core.h>
+#include <shlobj.h>
 
 #include "ScheduledTask.h"
 

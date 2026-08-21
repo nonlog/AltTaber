@@ -8,19 +8,19 @@
 #include <QDir>
 #include "utils/QtWin.h"
 #include <commoncontrols.h>
-#include <ShObjIdl_core.h>
+#include <shobjidl.h>
 #include <QDomDocument>
 #include <QPainter>
 #include <propkey.h>
-#include <atlbase.h>
 #include <minappmodel.h>
 #include <tlhelp32.h>
-#include <shlobj_core.h>
+#include <shlobj.h>
 #include <QFileIconProvider>
 #include <qoperatingsystemversion.h>
 #include <winrt/Windows.Management.Deployment.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.ApplicationModel.h>
+#include <vector>
 
 namespace Util {
     QString getWindowTitle(HWND hwnd) {
@@ -179,17 +179,18 @@ namespace Util {
     QString getFileDescription(const QString& path) {
         QString desc = QFileInfo(path).completeBaseName(); // fallback to base name
 
-        // 使用 CComPtr 自动释放 IShellItem2 接口
-        CComPtr<IShellItem2> pItem;
+        IShellItem2* pItem = nullptr;
         HRESULT hr = SHCreateItemFromParsingName(path.toStdWString().c_str(), nullptr, IID_PPV_ARGS(&pItem));
         if (SUCCEEDED(hr)) {
-            // 使用 CComHeapPtr 自动释放字符串（调用 CoTaskMemFree）
-            CComHeapPtr<WCHAR> pValue;
+            PWSTR pValue = nullptr;
             hr = pItem->GetString(PKEY_FileDescription, &pValue);
-            if (SUCCEEDED(hr))
+            if (SUCCEEDED(hr) && pValue) {
                 desc = QString::fromWCharArray(pValue);
-            else
+            } else {
                 qWarning() << "No FileDescription, fallback to file name:" << desc;
+            }
+            CoTaskMemFree(pValue);
+            pItem->Release();
         } else {
             qWarning() << "SHCreateItemFromParsingName() failed";
         }
@@ -414,7 +415,7 @@ namespace Util {
         // 48x48 icons, use SHIL_EXTRALARGE
         // 256x256 icons (after Vista), use SHIL_JUMBO
         IImageList* imageList;
-        HRESULT hResult = SHGetImageList(SHIL_JUMBO, IID_IImageList, (void**) &imageList);
+        HRESULT hResult = SHGetImageList(SHIL_JUMBO, __uuidof(IImageList), (void**) &imageList);
 
         QIcon icon;
         if (hResult == S_OK) {
@@ -461,13 +462,15 @@ namespace Util {
             return {};
         }
 
-        WCHAR packageFullName[PACKAGE_FULL_NAME_MAX_LENGTH + 1] = {0};
-        UINT32 length = _countof(packageFullName);
-        if (auto result = GetPackageFullName(hProcess, &length, packageFullName); result != ERROR_SUCCESS) {
-            if (result == ERROR_INSUFFICIENT_BUFFER)
-                qWarning() << "Buffer too small for packageFullName";
+        UINT32 length = 0;
+        if (GetPackageFullName(hProcess, &length, nullptr) != ERROR_INSUFFICIENT_BUFFER || length == 0) {
             CloseHandle(hProcess);
             return {}; // not UWP, no packageFullName
+        }
+        std::vector<WCHAR> packageFullName(length);
+        if (GetPackageFullName(hProcess, &length, packageFullName.data()) != ERROR_SUCCESS) {
+            CloseHandle(hProcess);
+            return {};
         }
         CloseHandle(hProcess);
 
@@ -479,7 +482,7 @@ namespace Util {
         try {
             PackageManager packageManager;
             // `FindPackage`需要管理员权限，而`FindPackageForUser(L"", ...)` (当前用户)不需要
-            auto package = packageManager.FindPackageForUser(L"", hstring(packageFullName));
+            auto package = packageManager.FindPackageForUser(L"", hstring(packageFullName.data()));
             if (!package) {
                 qDebug() << "Package not found?";
                 return {};

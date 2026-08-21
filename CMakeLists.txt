@@ -33,6 +33,7 @@ include_directories(header)
 
 find_package(Qt6 COMPONENTS
         Core
+        CorePrivate
         Gui
         Widgets
         Xml
@@ -79,18 +80,18 @@ add_executable(Win_Switcher src/main.cpp
 
 target_link_libraries(Win_Switcher
         Qt::Core
+        Qt::CorePrivate
         Qt::Gui
         Qt::Widgets
         Qt::Xml
         Qt::Network
         Dwmapi
+        comctl32
         RuntimeObject
 )
 
-# UpdateDialog uses Qt's private QZipReader API. The official Qt packages include these headers.
-target_include_directories(${PROJECT_NAME} PRIVATE
-        ${Qt6Core_PRIVATE_INCLUDE_DIRS}
-        ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
+# UpdateDialog uses Qt's private QZipReader API. Qt::CorePrivate supplies the
+# matching private include paths for both MSVC and MinGW Qt packages.
 
 set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME "AltTaber")
 if(CMAKE_BUILD_TYPE MATCHES "Release")

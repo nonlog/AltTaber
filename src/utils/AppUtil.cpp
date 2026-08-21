@@ -7,11 +7,10 @@
 #include <KnownFolders.h>
 #include <ShlGuid.h>
 #include <commoncontrols.h>
-#include <ShObjIdl_core.h>
+#include <shobjidl.h>
 #include <QDomDocument>
 #include <QPainter>
 #include <propkey.h>
-#include <atlbase.h>
 #include <QFileInfo>
 
 namespace AppUtil {
@@ -277,7 +276,7 @@ namespace AppUtil {
                     } else
                         qWarning() << "Failed to get display name or relPath.";
 
-                    CComPtr<IPropertyStore> store;
+                    IPropertyStore* store = nullptr;
                     // 可以GetCount枚举所有属性
                     hr = pChildItem->BindToHandler(nullptr, BHID_PropertyStore, IID_PPV_ARGS(&store));
                     QString exePath;
@@ -292,6 +291,7 @@ namespace AppUtil {
                             exePath = AppUtil::getUwpExePathByAUMID(relPath);
                         }
                         PropVariantClear(&var);
+                        store->Release();
                     } else
                         qWarning() << "Failed to get property store.";
 
