@@ -99,8 +99,10 @@
 配置保存在`config.ini`文件中，有两种方式可以修改配置：
 
 1. 直接修改程序目录下的`config.ini`文件，并重启程序
-2. 🌟\[推荐\] 使用托盘菜单（右键托盘图标）中的`Settings`选项，此时会自动用`notepad`打开配置文件；
-   修改后，保存并**关闭文件**，程序会自动重载配置
+2. 🌟\[推荐\] 使用托盘菜单（右键托盘图标）中的`Settings`选项，在设置窗口中保存并应用；
+   也可使用`Open config.ini`编辑原始配置，关闭记事本后程序会自动重载配置。
+
+> 若已在设置中隐藏托盘图标，再次启动`AltTaber.exe`不会重复启动程序，而会直接打开已运行实例的设置窗口。
 
 ### 配置项
 
@@ -111,6 +113,15 @@
 font_family = "Microsoft YaHei UI"
 font_size = 10
 ```
+
+#### 常规
+
+```ini
+[general]
+hide_tray_icon = true
+```
+
+`hide_tray_icon`可隐藏通知区域图标；需要重新打开设置时，直接再次运行`AltTaber.exe`。
 
 ## 🧐Reference
 

@@ -30,8 +30,8 @@
 namespace {
     constexpr int PreviewAvailableRole = Qt::UserRole + 1;
     constexpr int CloseButtonPadding = 7;
-    constexpr int DesiredCardWidth = 280;
-    constexpr int DesiredCardHeight = 186;
+    constexpr int DefaultCardWidth = 280;
+    constexpr int DefaultCardHeight = 186;
     constexpr int MinimumCardWidth = 168;
     constexpr int MinimumCardHeight = 112;
     constexpr int CardInset = 4;
@@ -72,7 +72,7 @@ namespace {
     }
 
     int titleHeightForCard(const QRect& card) {
-        return qBound(34, card.height() / 5, 42);
+        return qBound(36, card.height() / 5, 44);
     }
 
     QRect cardRectForOption(const QStyleOptionViewItem& option) {
@@ -119,11 +119,11 @@ namespace {
             const QColor textColor = dark ? QColor(247, 247, 247) : QColor(32, 32, 32);
 
             QPen cardPen(selected ? selectedBorder : border);
-            cardPen.setWidthF(selected ? 3.0 : 1.0);
+            cardPen.setWidthF(selected ? 2.0 : 1.0);
             cardPen.setJoinStyle(Qt::RoundJoin);
             painter->setPen(cardPen);
             painter->setBrush(selected ? selectedFill : cardFill);
-            painter->drawRoundedRect(card, 10, 10);
+            painter->drawRoundedRect(card, 12, 12);
 
             const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
             const int iconSize = qBound(20, titleHeight - 14, 24);
@@ -160,7 +160,7 @@ namespace {
 
             painter->setPen(QPen(dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 20), 1));
             painter->setBrush(previewFill);
-            painter->drawRoundedRect(preview, 6, 6);
+            painter->drawRoundedRect(preview, 8, 8);
 
             if (!index.data(PreviewAvailableRole).toBool() && !icon.isNull()) {
                 const int side = qBound(34, qMin(preview.width(), preview.height()) / 2, 56);
@@ -174,7 +174,7 @@ namespace {
 
         QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex& index) const override {
             const QSize hint = index.data(Qt::SizeHintRole).toSize();
-            return hint.isValid() ? hint : QSize(DesiredCardWidth, DesiredCardHeight);
+            return hint.isValid() ? hint : QSize(DefaultCardWidth, DefaultCardHeight);
         }
     };
 }
@@ -211,7 +211,7 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setFrameShape(QFrame::NoFrame);
     lw->setContentsMargins(0, 0, 0, 0);
     lw->setIconSize({22, 22});
-    lw->setGridSize({DesiredCardWidth, DesiredCardHeight});
+    lw->setGridSize({DefaultCardWidth, DefaultCardHeight});
     lw->setUniformItemSizes(true);
     lw->setSpacing(0);
     lw->setStyleSheet(R"(
@@ -574,14 +574,19 @@ bool Widget::prepareListWidget() {
     }
 
     const auto available = screen->availableGeometry();
-    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.92) - ListWidgetMargin.left() - ListWidgetMargin.right());
-    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.82) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
+    // Windows 11 keeps the switcher compact and centered rather than allowing it to span
+    // the entire desktop. Use screen-relative preferred cards so this remains balanced from
+    // a small laptop panel to a high-resolution external monitor.
+    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.86) - ListWidgetMargin.left() - ListWidgetMargin.right());
+    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.72) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
     const int count = windowList.size();
-    constexpr qreal CardAspect = qreal(DesiredCardWidth) / qreal(DesiredCardHeight);
+    constexpr qreal CardAspect = qreal(DefaultCardWidth) / qreal(DefaultCardHeight);
+    const int desiredCardWidth = qBound(240, qRound(available.width() * 0.16), 320);
+    const int desiredCardHeight = qRound(desiredCardWidth / CardAspect);
 
     int bestRows = 1;
     int bestColumns = count;
-    QSize bestCardSize(DesiredCardWidth, DesiredCardHeight);
+    QSize bestCardSize(desiredCardWidth, desiredCardHeight);
     qreal bestScore = std::numeric_limits<qreal>::max();
 
     for (int rows = 1; rows <= count; ++rows) {
@@ -591,18 +596,18 @@ bool Widget::prepareListWidget() {
         if (maxWidth <= 0 || maxHeight <= 0)
             continue;
 
-        int cardWidth = qMin(DesiredCardWidth, maxWidth);
+        int cardWidth = qMin(desiredCardWidth, maxWidth);
         int cardHeight = qRound(cardWidth / CardAspect);
-        if (cardHeight > qMin(DesiredCardHeight, maxHeight)) {
-            cardHeight = qMin(DesiredCardHeight, maxHeight);
+        if (cardHeight > qMin(desiredCardHeight, maxHeight)) {
+            cardHeight = qMin(desiredCardHeight, maxHeight);
             cardWidth = qRound(cardHeight * CardAspect);
         }
 
         const int undersize = qMax(0, MinimumCardWidth - cardWidth) +
                               qMax(0, MinimumCardHeight - cardHeight);
         const int emptyCells = rows * columns - count;
-        const qreal sizeLoss = (DesiredCardWidth - qMin(cardWidth, DesiredCardWidth)) * 0.75 +
-                               (DesiredCardHeight - qMin(cardHeight, DesiredCardHeight)) * 0.45;
+        const qreal sizeLoss = (desiredCardWidth - qMin(cardWidth, desiredCardWidth)) * 0.75 +
+                               (desiredCardHeight - qMin(cardHeight, desiredCardHeight)) * 0.45;
         const qreal score = undersize * 20.0 + emptyCells * 180.0 + sizeLoss + rows * 12.0;
 
         if (score < bestScore) {

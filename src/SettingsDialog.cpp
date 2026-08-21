@@ -26,8 +26,8 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     setAttribute(Qt::WA_TranslucentBackground, false);
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAutoFillBackground(false);
-    resize(580, 470);
-    setMinimumSize(540, 440);
+    resize(580, 500);
+    setMinimumSize(540, 470);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(22, 20, 22, 20);
@@ -43,8 +43,11 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     startupCheck = new QCheckBox(tr("Start AltTaber with Windows"), generalGroup);
     adminStartupCheck = new QCheckBox(tr("Run at startup as administrator"), generalGroup);
     adminStartupCheck->setToolTip(tr("Uses a Windows Task Scheduler logon task with highest privileges. Enabling or disabling this mode may show one UAC prompt."));
+    hideTrayIconCheck = new QCheckBox(tr("Hide the notification area icon"), generalGroup);
+    hideTrayIconCheck->setToolTip(tr("To open settings again after hiding the icon, start AltTaber.exe. The running instance will show this window."));
     generalLayout->addWidget(startupCheck);
     generalLayout->addWidget(adminStartupCheck);
+    generalLayout->addWidget(hideTrayIconCheck);
     root->addWidget(generalGroup);
 
     auto* displayGroup = new QGroupBox(tr("Display"), this);
@@ -113,6 +116,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
         updateApplyState();
     });
     connect(adminStartupCheck, &QCheckBox::toggled, this, changed);
+    connect(hideTrayIconCheck, &QCheckBox::toggled, this, changed);
     connect(monitorCombo, &QComboBox::currentIndexChanged, this, changed);
     connect(fontCombo, &QFontComboBox::currentFontChanged, this, [this] {
         updateFontPreview();
@@ -142,6 +146,7 @@ void SettingsDialog::loadSettings() {
     startupCheck->setChecked(startupMode != Startup::Mode::Disabled);
     adminStartupCheck->setChecked(startupMode == Startup::Mode::Elevated);
     adminStartupCheck->setEnabled(startupCheck->isChecked());
+    hideTrayIconCheck->setChecked(cfg.get("general/hide_tray_icon", false).toBool());
 
     const int monitorIndex = monitorCombo->findData(static_cast<int>(cfg.getDisplayMonitor()));
     monitorCombo->setCurrentIndex(monitorIndex >= 0 ? monitorIndex : 0);
@@ -165,6 +170,7 @@ bool SettingsDialog::saveSettings() {
         startupOk = Startup::setMode(wantedStartupMode);
 
     cfg.setDisplayMonitor(static_cast<DisplayMonitor>(monitorCombo->currentData().toInt()));
+    cfg.set("general/hide_tray_icon", hideTrayIconCheck->isChecked());
     cfg.set("label/font_family", fontCombo->currentFont().family());
     cfg.set("label/font_size", fontSizeSpin->value());
     cfg.notifyConfigEdited();

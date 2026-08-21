@@ -24,6 +24,17 @@ public:
         return instance;
     }
 
+    void showSettings() {
+        static auto* dlg = new SettingsDialog;
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    }
+
+    void applyVisibilityFromConfig() {
+        setVisible(!cfg.get("general/hide_tray_icon", false).toBool());
+    }
+
 private:
     explicit SystemTray(QWidget* parent = nullptr) : QSystemTrayIcon(parent) {
         setIcon(QIcon(":/img/icon.ico"));
@@ -54,14 +65,13 @@ private:
             dlg->show();
         });
 
-        connect(act_settings, &QAction::triggered, this, [] {
-            static auto* dlg = new SettingsDialog;
-            dlg->show();
-            dlg->raise();
-            dlg->activateWindow();
+        connect(act_settings, &QAction::triggered, this, [this] {
+            showSettings();
         });
         connect(&cfg, &ConfigManager::configEdited, this, [this] {
-            this->showMessage("Config Edited", "auto reloaded");
+            applyVisibilityFromConfig();
+            if (isVisible())
+                this->showMessage("Config Edited", "auto reloaded");
         });
 
         act_startup->setCheckable(true);

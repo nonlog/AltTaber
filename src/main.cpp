@@ -1,7 +1,6 @@
 #include <QApplication>
 #include <windows.h>
 #include <QTimer>
-#include <QMessageBox>
 #include <qoperatingsystemversion.h>
 #include <QStyleHints>
 #include <QSettings>
@@ -41,9 +40,15 @@ int main(int argc, char* argv[]) {
     }
     SingleApp singleApp("AltTaber-MrBeanCpp");
     if (singleApp.isRunning()) {
-        qWarning() << "Another instance is running! Exit";
-        QMessageBox::warning(nullptr, "Warning", "AltTaber is already running!");
+        if (!singleApp.sendCommand("show-settings"))
+            qWarning() << "Another AltTaber instance is running, but its settings command was unavailable";
         return 0;
+    }
+    if (!singleApp.startCommandServer([](const QString& command) {
+            if (command == "show-settings")
+                QTimer::singleShot(0, [] { sysTray.showSettings(); });
+        })) {
+        qWarning() << "AltTaber settings command server was not started";
     }
 
     // 其实Qt内部已经初始化了，这里是保险起见
@@ -52,7 +57,7 @@ int main(int argc, char* argv[]) {
 
     qDebug() << "isUserAdmin" << IsUserAnAdmin();
     qDebug() << "System Version" << QOperatingSystemVersion::current().version();
-    sysTray.show(); // show之后才能使用系统通知
+    sysTray.applyVisibilityFromConfig();
     UpdateDialog::verifyUpdate(a); // 验证更新
     // Keep Qt widgets in sync with the Windows app theme. The switcher itself also reads this
     // registry value directly, so native controls and our custom-painted cards use one theme.

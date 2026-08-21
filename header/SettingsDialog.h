@@ -29,6 +29,7 @@ private:
 
     QCheckBox* startupCheck{};
     QCheckBox* adminStartupCheck{};
+    QCheckBox* hideTrayIconCheck{};
     QComboBox* monitorCombo{};
     QFontComboBox* fontCombo{};
     QSpinBox* fontSizeSpin{};

@@ -104,7 +104,7 @@ private:
 
     Ui::Widget* ui;
     QListWidget* lw = nullptr;
-    const QMargins ListWidgetMargin{24, 24, 24, 24};
+    const QMargins ListWidgetMargin{30, 28, 30, 28};
     /// exePath -> (HWND, time)
     QHash<QString, QHash<HWND, QDateTime>> winActiveOrder;
     QList<HWND> groupWindowOrder; // temporary ordering for grouped-window wheel actions
