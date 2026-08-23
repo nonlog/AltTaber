@@ -49,7 +49,8 @@ Validation:
 
 - Test executable: `D:\Workspace\general\AltTaber\test-build\AltTaber.exe`
 - Build tree: `D:\Workspace\general\AltTaber\build-codex-ucrt64-nosys`
-- These changes are **not committed or pushed** yet.
+- Implementation commit: `ce48f0e1c6406d4a32e2d8b716682eff68a8142c` (`Codex <codex@openai.com>`).
+- Commit is local only and has **not been pushed**; wait for user confirmation before push.
 
 ## 2026-08-22 and earlier (summary)
 
