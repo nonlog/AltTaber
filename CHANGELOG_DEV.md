@@ -11,6 +11,15 @@ This file records local development work that has not necessarily been committed
 - Release notes were refreshed to describe the Windows 11 parity work, minimized-window aspect-ratio fix, DWM thumbnail adhesion fix, and removal of the one-frame fallback-icon flash.
 - Release plan: locally validate the 0.6.3 build, commit the release metadata as Codex, fast-forward `origin/master`, create/push tag `v0.6.3`, wait for the GitHub Actions release workflow, then verify the published ZIP and SHA-256.
 
+Release result:
+
+- `origin/master` was fast-forwarded through release-preparation commit `9c6dc5d3dd2858f7a04d0f4e0c6230a938970154`.
+- Tag `v0.6.3` was pushed and GitHub Actions run `32638381629` completed successfully.
+- Public release: `https://github.com/nonlog/AltTaber/releases/tag/v0.6.3`.
+- Published asset: `AltTaber-0.6.3-win64.zip`, 48,380,552 bytes.
+- Release asset SHA-256: `103d412ee3c59676488f044cc9f99c1866a8da1de54895228cb69bf2a3491627`.
+- Downloaded the public release asset again after publication; SHA-256 matched and the packaged `AltTaber.exe` reports `FileVersion=0.6.3.0` / `ProductVersion=0.6.3.0`.
+
 ### Remove one-frame fallback-icon flash before live previews
 
 - User visually confirmed that the previously reported window-adhesion issue now appears fixed on the physical display.
