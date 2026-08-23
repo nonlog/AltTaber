@@ -4,6 +4,13 @@ This file records local development work that has not necessarily been committed
 
 ## 2026-08-23
 
+### v0.6.3 release preparation
+
+- User confirmed the current test build is usable and approved publishing a release.
+- Release version bumped from `0.6.2` to `0.6.3` in `CMakeLists.txt` and the GitHub Actions packaging/release workflow.
+- Release notes were refreshed to describe the Windows 11 parity work, minimized-window aspect-ratio fix, DWM thumbnail adhesion fix, and removal of the one-frame fallback-icon flash.
+- Release plan: locally validate the 0.6.3 build, commit the release metadata as Codex, fast-forward `origin/master`, create/push tag `v0.6.3`, wait for the GitHub Actions release workflow, then verify the published ZIP and SHA-256.
+
 ### Remove one-frame fallback-icon flash before live previews
 
 - User visually confirmed that the previously reported window-adhesion issue now appears fixed on the physical display.

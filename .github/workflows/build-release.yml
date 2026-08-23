@@ -47,25 +47,28 @@ jobs:
           Copy-Item "build\AltTaber.exe" $dist
           windeployqt --release --no-translations --dir $dist (Join-Path $dist "AltTaber.exe")
           Copy-Item "README.md" $dist
-          Compress-Archive -Path "$dist\*" -DestinationPath "dist\AltTaber-0.6.2-win64.zip" -Force
-          Get-FileHash "dist\AltTaber-0.6.2-win64.zip" -Algorithm SHA256
+          Compress-Archive -Path "$dist\*" -DestinationPath "dist\AltTaber-0.6.3-win64.zip" -Force
+          Get-FileHash "dist\AltTaber-0.6.3-win64.zip" -Algorithm SHA256
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AltTaber-0.6.2-win64
-          path: dist/AltTaber-0.6.2-win64.zip
+          name: AltTaber-0.6.3-win64
+          path: dist/AltTaber-0.6.3-win64.zip
           if-no-files-found: error
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/AltTaber-0.6.2-win64.zip
+          files: dist/AltTaber-0.6.3-win64.zip
           generate_release_notes: true
           body: |
-            Fork release focused on a Windows 11-style per-window Alt+Tab view.
+            Windows 11 visual-parity update for the Microsoft Pinyin-safe AltTaber fork.
 
-            - Uses DWM live thumbnails for individual windows.
+            - Matches Windows 11 dark/light appearance with transient Desktop Acrylic.
+            - Uses variable-width DWM live-preview cards with native-like row wrapping and centering.
+            - Uses the current Windows accent color only for the active Alt+Tab target.
+            - Fixes minimized-window aspect ratios, cross-session thumbnail adhesion, and the one-frame fallback-icon flash before live previews.
             - Keeps AltTaber's own low-level Alt+Tab hook, avoiding the native Windows 11 task switcher path that can corrupt Microsoft Pinyin per-window Chinese/English state.
-            - Falls back to the app icon when a DWM thumbnail cannot be registered.
+            - Falls back to the app icon only when a DWM thumbnail cannot be registered.
