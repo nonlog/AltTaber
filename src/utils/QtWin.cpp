@@ -32,7 +32,8 @@ namespace QtWin {
         return QPixmap::fromImage(QImage::fromHICON(icon));
     }
 
-    bool applyMicaAlt(QWidget* window, bool darkMode) {
+    static bool applySystemBackdrop(QWidget* window, bool darkMode,
+                                    DWM_SYSTEMBACKDROP_TYPE backdrop) {
         if (!window)
             return false;
         const HWND hwnd = reinterpret_cast<HWND>(window->winId());
@@ -42,7 +43,6 @@ namespace QtWin {
         const BOOL dark = darkMode ? TRUE : FALSE;
         DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-        const DWM_SYSTEMBACKDROP_TYPE backdrop = DWMSBT_TABBEDWINDOW;
         const HRESULT backdropHr = DwmSetWindowAttribute(
             hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
 
@@ -50,9 +50,19 @@ namespace QtWin {
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
 
         // Extend DWM rendering through the full client area. The top-level Qt window stays
-        // non-layered/non-translucent; DWM itself paints the opaque Mica Alt material.
+        // non-layered/non-translucent; DWM itself paints the selected system material.
         const MARGINS margins{-1, -1, -1, -1};
         DwmExtendFrameIntoClientArea(hwnd, &margins);
         return SUCCEEDED(backdropHr);
+    }
+
+    bool applyMicaAlt(QWidget* window, bool darkMode) {
+        return applySystemBackdrop(window, darkMode, DWMSBT_TABBEDWINDOW);
+    }
+
+    bool applySwitcherBackdrop(QWidget* window, bool darkMode) {
+        // Alt+Tab is a transient shell surface. Windows maps TRANSIENTWINDOW to
+        // Desktop Acrylic, whereas TABBEDWINDOW is Mica Alt for long-lived tabbed UI.
+        return applySystemBackdrop(window, darkMode, DWMSBT_TRANSIENTWINDOW);
     }
 } // QtWin

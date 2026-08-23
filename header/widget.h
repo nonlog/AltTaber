@@ -104,11 +104,13 @@ private:
 
     Ui::Widget* ui;
     QListWidget* lw = nullptr;
-    const QMargins ListWidgetMargin{30, 28, 30, 28};
+    // Match the generous breathing room around cards in the Windows 11 shell switcher.
+    const QMargins ListWidgetMargin{54, 50, 54, 50};
     /// exePath -> (HWND, time)
     QHash<QString, QHash<HWND, QDateTime>> winActiveOrder;
     QList<HWND> groupWindowOrder; // temporary ordering for grouped-window wheel actions
     QList<RegisteredThumbnail> thumbnails;
+    quint64 thumbnailGeneration = 0; // invalidates delayed DWM refreshes across Alt+Tab sessions
     HWND pendingTargetWindow = nullptr;
 };
 

@@ -101,10 +101,14 @@ int main(int argc, char* argv[]) {
             auto className = Util::getClassName(hwnd);
             // ForegroundStaging貌似是辅助过渡动画
             // 检测 Alt 按下，防止误判 Win+Tab (任务视图)
-            if (hwnd == GetForegroundWindow() && Util::isKeyPressed(VK_MENU) &&
-                (className == "ForegroundStaging" /*|| className == "XamlExplorerHostIslandWindow"*/)) { // 任务切换窗口
-                // 顺序是ForegroundStaging -> XamlExplorerHostIslandWindow，不需要都检测，否则会重复
-                // 且：XamlExplorerHostIslandWindow 会导致误检测（某些系统版本，任务栏app窗口>1时，点击窗口）
+            const auto windowTitle = Util::getWindowTitle(hwnd);
+            const bool isTaskSwitcher = className == "ForegroundStaging"
+                                        || (className == "XamlExplorerHostIslandWindow"
+                                            && windowTitle == "Task Switching");
+            if (hwnd == GetForegroundWindow() && Util::isKeyPressed(VK_MENU) && isTaskSwitcher) { // 任务切换窗口
+                // Newer Windows 11 builds can foreground XamlExplorerHostIslandWindow directly.
+                // Require its shell-specific "Task Switching" title to avoid confusing it with
+                // ordinary taskbar preview islands that use the same window class.
                 qDebug() << "任务切换 detected!" << className;
                 int t = 0;
                 do {

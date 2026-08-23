@@ -1,4 +1,4 @@
-#include "../header/widget.h"
+﻿#include "../header/widget.h"
 #include "ui_Widget.h"
 #include "utils/Util.h"
 #include <QDebug>
@@ -17,8 +17,8 @@
 #include <QSettings>
 #include <QSet>
 #include <QFrame>
+#include <QVector>
 #include <QtMath>
-#include <limits>
 #include <algorithm>
 #include "utils/QtWin.h"
 #include <QWheelEvent>
@@ -29,13 +29,14 @@
 
 namespace {
     constexpr int PreviewAvailableRole = Qt::UserRole + 1;
+    constexpr int SpacerRole = Qt::UserRole + 2;
     constexpr int CloseButtonPadding = 7;
-    constexpr int DefaultCardWidth = 280;
-    constexpr int DefaultCardHeight = 186;
-    constexpr int MinimumCardWidth = 168;
-    constexpr int MinimumCardHeight = 112;
-    constexpr int CardInset = 4;
-    constexpr int PreviewInset = 8;
+    constexpr int DefaultCardWidth = 320;
+    constexpr int DefaultCardHeight = 200;
+    constexpr int MinimumCardWidth = 140;
+    constexpr int MinimumCardHeight = 108;
+    constexpr int CardInset = 6;
+    constexpr int PreviewInset = 7;
 
     bool useDarkPalette() {
 #ifdef Q_OS_WIN
@@ -52,6 +53,21 @@ namespace {
 
     QColor systemAccentColor() {
 #ifdef Q_OS_WIN
+        // AccentColorMenu is the user's actual Windows accent color. AccentPalette
+        // contains a family of derived shades; picking a fixed palette slot can turn
+        // a brown/blue/green system accent into an unrelated purple shade.
+        QSettings explorerAccent(
+            R"(HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Accent)",
+            QSettings::NativeFormat);
+        bool accentOk = false;
+        const quint32 accent = explorerAccent.value("AccentColorMenu").toUInt(&accentOk);
+        if (accentOk) {
+            // Explorer stores this DWORD as AABBGGRR.
+            return QColor(accent & 0xFF,
+                          (accent >> 8) & 0xFF,
+                          (accent >> 16) & 0xFF);
+        }
+
         DWORD colorization = 0;
         BOOL opaqueBlend = FALSE;
         if (SUCCEEDED(DwmGetColorizationColor(&colorization, &opaqueBlend))) {
@@ -73,6 +89,121 @@ namespace {
 
     int titleHeightForCard(const QRect& card) {
         return qBound(36, card.height() / 5, 44);
+    }
+
+    QSize sourceWindowSize(HWND hwnd) {
+#ifdef Q_OS_WIN
+        if (!hwnd || !IsWindow(hwnd))
+            return {};
+
+        // A minimized Win32 window can report its tiny iconic rectangle (for example
+        // 183x31) instead of the restore rectangle. Using that aspect ratio makes the
+        // Alt+Tab card and DWM preview look inexplicably ultra-wide. Windows' own
+        // switcher uses the normal/restored window shape instead.
+        if (IsIconic(hwnd)) {
+            WINDOWPLACEMENT placement{};
+            placement.length = sizeof(placement);
+            if (GetWindowPlacement(hwnd, &placement)) {
+                const auto& normal = placement.rcNormalPosition;
+                const int width = normal.right - normal.left;
+                const int height = normal.bottom - normal.top;
+                if (width > 0 && height > 0)
+                    return {width, height};
+            }
+        }
+
+        RECT bounds{};
+        if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                            &bounds, sizeof(bounds)))) {
+            const int width = bounds.right - bounds.left;
+            const int height = bounds.bottom - bounds.top;
+            if (width > 0 && height > 0)
+                return {width, height};
+        }
+
+        if (GetWindowRect(hwnd, &bounds)) {
+            const int width = bounds.right - bounds.left;
+            const int height = bounds.bottom - bounds.top;
+            if (width > 0 && height > 0)
+                return {width, height};
+        }
+#else
+        Q_UNUSED(hwnd);
+#endif
+        return {};
+    }
+
+    int cardWidthForWindow(HWND hwnd, int itemHeight) {
+        const auto source = sourceWindowSize(hwnd);
+        qreal aspect = source.height() > 0
+                           ? qreal(source.width()) / qreal(source.height())
+                           : qreal(DefaultCardWidth) / qreal(DefaultCardHeight);
+        aspect = qBound<qreal>(0.42, aspect, 3.00);
+
+        const int paintedCardHeight = qMax(1, itemHeight - 2 * CardInset);
+        const int titleHeight = titleHeightForCard(QRect(0, 0, 1, paintedCardHeight));
+        const int previewHeight = qMax(1, paintedCardHeight - titleHeight - 3 - PreviewInset);
+        const int naturalWidth = qRound(aspect * previewHeight)
+                                 + 2 * (CardInset + PreviewInset) + 8;
+        const int minimumWidth = qMax(MinimumCardWidth, qRound(itemHeight * 0.64));
+        const int maximumWidth = qMax(minimumWidth, qRound(itemHeight * 2.25));
+        return qBound(minimumWidth, naturalWidth, maximumWidth);
+    }
+
+    QList<int> widthBalancedRowCounts(const QList<int>& widths, int rows) {
+        const int itemCount = widths.size();
+        if (itemCount <= 0)
+            return {};
+
+        rows = qBound(1, rows, itemCount);
+        QVector<qint64> prefix(itemCount + 1, 0);
+        for (int i = 0; i < itemCount; ++i)
+            prefix[i + 1] = prefix[i] + widths.at(i);
+
+        constexpr qint64 Inf = (qint64(1) << 60);
+        QVector<QVector<qint64>> bestMax(rows + 1,
+                                         QVector<qint64>(itemCount + 1, Inf));
+        QVector<QVector<qint64>> balancePenalty(rows + 1,
+                                                QVector<qint64>(itemCount + 1, Inf));
+        QVector<QVector<int>> cut(rows + 1,
+                                  QVector<int>(itemCount + 1, -1));
+        bestMax[0][0] = 0;
+        balancePenalty[0][0] = 0;
+        const qint64 totalWidth = prefix[itemCount];
+
+        // Linear partition: preserve Alt+Tab order, but choose row boundaries that
+        // minimize the widest row. This mirrors the native shell's width-sensitive
+        // wrapping much better than fixed 3+4 / 4+5 rules for odd item counts.
+        for (int row = 1; row <= rows; ++row) {
+            for (int end = row; end <= itemCount; ++end) {
+                for (int start = row - 1; start < end; ++start) {
+                    if (bestMax[row - 1][start] == Inf)
+                        continue;
+                    const qint64 rowWidth = prefix[end] - prefix[start];
+                    const qint64 candidateMax = qMax(bestMax[row - 1][start], rowWidth);
+                    const qint64 candidatePenalty = balancePenalty[row - 1][start]
+                                                    + qAbs(rowWidth * rows - totalWidth);
+                    if (candidateMax < bestMax[row][end]
+                        || (candidateMax == bestMax[row][end]
+                            && candidatePenalty < balancePenalty[row][end])) {
+                        bestMax[row][end] = candidateMax;
+                        balancePenalty[row][end] = candidatePenalty;
+                        cut[row][end] = start;
+                    }
+                }
+            }
+        }
+
+        QList<int> counts;
+        int end = itemCount;
+        for (int row = rows; row >= 1; --row) {
+            const int start = cut[row][end];
+            if (start < 0)
+                return {};
+            counts.prepend(end - start);
+            end = start;
+        }
+        return counts;
     }
 
     QRect cardRectForOption(const QStyleOptionViewItem& option) {
@@ -100,30 +231,54 @@ namespace {
 
         void paint(QPainter* painter, const QStyleOptionViewItem& option,
                    const QModelIndex& index) const override {
+            if (index.data(SpacerRole).toBool())
+                return;
             painter->save();
             painter->setRenderHint(QPainter::Antialiasing);
+            // Never let the antialiased selection stroke bleed into a neighboring
+            // item's paint area. This also prevents stale edges from visually
+            // joining two adjacent Alt+Tab cards while the current item changes.
+            painter->setClipRect(option.rect);
 
             const bool dark = useDarkPalette();
-            const bool selected = option.state & QStyle::State_Selected;
+            const auto* view = qobject_cast<const QListView*>(option.widget);
+            // Qt's selection state can be affected by style/view bookkeeping. The
+            // Windows switcher has exactly one emphasized card: the current item.
+            const bool selected = view && view->currentIndex() == index;
             const auto card = cardRectForOption(option);
             const auto preview = previewRectForOption(option);
             const auto closeButton = closeButtonRectForOption(option);
             const int titleHeight = titleHeightForCard(card);
             const bool hovered = option.state & QStyle::State_MouseOver;
 
-            const QColor cardFill = dark ? QColor(48, 48, 48, 232) : QColor(255, 255, 255, 226);
-            const QColor selectedFill = dark ? QColor(58, 58, 58, 244) : QColor(255, 255, 255, 246);
-            const QColor border = dark ? QColor(255, 255, 255, 34) : QColor(0, 0, 0, 28);
+            const QColor cardFill = dark ? QColor(31, 31, 31) : QColor(248, 248, 248);
+            const QColor selectedFill = dark ? QColor(31, 31, 31) : QColor(250, 250, 250);
             const QColor selectedBorder = systemAccentColor();
-            const QColor previewFill = dark ? QColor(20, 20, 20, 210) : QColor(235, 235, 235, 235);
+            const QColor previewFill = dark ? QColor(20, 20, 20) : QColor(238, 238, 238);
             const QColor textColor = dark ? QColor(247, 247, 247) : QColor(32, 32, 32);
 
-            QPen cardPen(selected ? selectedBorder : border);
-            cardPen.setWidthF(selected ? 2.0 : 1.0);
-            cardPen.setJoinStyle(Qt::RoundJoin);
-            painter->setPen(cardPen);
-            painter->setBrush(selected ? selectedFill : cardFill);
-            painter->drawRoundedRect(card, 12, 12);
+            // Draw the accent entirely *inside* the card instead of using a QPen
+            // centered on the outer edge. A centered antialiased pen leaves half of
+            // its pixels outside the normal card fill; when the current item moves,
+            // those pixels can survive the repaint and accumulate into joined or
+            // deformed outlines across previously visited cards.
+            painter->setPen(Qt::NoPen);
+            if (selected) {
+                // Keep every accent pixel strictly inside the normal card geometry.
+                // A later opaque non-selected repaint can then erase the previous state.
+                const QRect accentCard = card.adjusted(1, 1, -1, -1);
+                painter->setBrush(selectedBorder);
+                painter->drawRoundedRect(accentCard, 7, 7);
+
+                // Native Windows 11 uses a visibly heavier current-target outline.
+                // Three logical pixels becomes ~4 physical pixels at 125% DPI.
+                const QRect innerCard = accentCard.adjusted(3, 3, -3, -3);
+                painter->setBrush(selectedFill);
+                painter->drawRoundedRect(innerCard, 4, 4);
+            } else {
+                painter->setBrush(cardFill);
+                painter->drawRoundedRect(card, 8, 8);
+            }
 
             const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
             const int iconSize = qBound(20, titleHeight - 14, 24);
@@ -131,7 +286,7 @@ namespace {
             if (!icon.isNull())
                 icon.paint(painter, iconRect, Qt::AlignCenter, QIcon::Normal);
 
-            const int textRight = (selected || hovered) ? closeButton.left() - 7 : card.right() - 10;
+            const int textRight = hovered ? closeButton.left() - 7 : card.right() - 10;
             QRect textRect(iconRect.right() + 8, card.top(),
                            qMax(10, textRight - iconRect.right() - 8),
                            titleHeight);
@@ -143,13 +298,14 @@ namespace {
                                              textRect.width());
             painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, title);
 
-            // Windows 11 exposes a close button on the active/hovered Alt+Tab card.
-            if (selected || hovered) {
+            // Windows 11 exposes the close affordance on pointer hover; keyboard
+            // selection alone keeps the title row clean.
+            if (hovered) {
                 const QColor closeFill = dark ? QColor(255, 255, 255, 18) : QColor(0, 0, 0, 12);
                 const QColor closeStroke = dark ? QColor(245, 245, 245) : QColor(45, 45, 45);
                 painter->setPen(Qt::NoPen);
                 painter->setBrush(closeFill);
-                painter->drawRoundedRect(closeButton, 5, 5);
+                painter->drawRoundedRect(closeButton, 4, 4);
 
                 painter->setPen(QPen(closeStroke, 1.35, Qt::SolidLine, Qt::RoundCap));
                 const QPoint c = closeButton.center();
@@ -158,9 +314,9 @@ namespace {
                 painter->drawLine(c + QPoint(d, -d), c + QPoint(-d, d));
             }
 
-            painter->setPen(QPen(dark ? QColor(255, 255, 255, 24) : QColor(0, 0, 0, 20), 1));
+            painter->setPen(QPen(dark ? QColor(44, 44, 44) : QColor(222, 222, 222), 1));
             painter->setBrush(previewFill);
-            painter->drawRoundedRect(preview, 8, 8);
+            painter->drawRoundedRect(preview, 4, 4);
 
             if (!index.data(PreviewAvailableRole).toBool() && !icon.isNull()) {
                 const int side = qBound(34, qMin(preview.width(), preview.height()) / 2, 56);
@@ -183,7 +339,8 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw = ui->listWidget;
     setWindowFlag(Qt::WindowStaysOnTopHint);
     setWindowFlag(Qt::FramelessWindowHint);
-    // Mica Alt is an opaque DWM backdrop. Do not use a layered/per-pixel translucent Qt window.
+    // Let DWM own the switcher's transient Acrylic backdrop. Do not use a
+    // layered/per-pixel translucent Qt window on top of it.
     setAttribute(Qt::WA_TranslucentBackground, false);
     setAttribute(Qt::WA_NoSystemBackground, true);
     setAutoFillBackground(false);
@@ -194,7 +351,7 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
 #ifdef Q_OS_WIN
     const COLORREF noBorder = 0xFFFFFFFE; // DWMWA_COLOR_NONE
     DwmSetWindowAttribute(hWnd(), DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
-    QtWin::applyMicaAlt(this, useDarkPalette());
+    QtWin::applySwitcherBackdrop(this, useDarkPalette());
 #endif
 
     setupLabelFont();
@@ -204,6 +361,9 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setFlow(QListView::LeftToRight);
     lw->setWrapping(true);
     lw->setResizeMode(QListView::Adjust);
+    // The shell has one current Alt+Tab target, not a Qt multi-selection. Keep Qt
+    // selection painting out of the equation and render emphasis from currentIndex().
+    lw->setSelectionMode(QAbstractItemView::NoSelection);
     lw->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     lw->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     // QListView's default frame makes viewport() a few pixels narrower than the widget.
@@ -211,8 +371,10 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setFrameShape(QFrame::NoFrame);
     lw->setContentsMargins(0, 0, 0, 0);
     lw->setIconSize({22, 22});
-    lw->setGridSize({DefaultCardWidth, DefaultCardHeight});
-    lw->setUniformItemSizes(true);
+    // Keep the grid unset so Qt respects each item's size hint. Native Windows 11
+    // Alt+Tab gives portrait, landscape, and ordinary windows different card widths.
+    lw->setGridSize(QSize());
+    lw->setUniformItemSizes(false);
     lw->setSpacing(0);
     lw->setStyleSheet(R"(
         QListWidget {
@@ -230,8 +392,19 @@ Widget::Widget(QWidget* parent) : QWidget(parent), ui(new Ui::Widget) {
     lw->setMouseTracking(true);
     lw->viewport()->setMouseTracking(true);
 
-    connect(lw, &QListWidget::currentItemChanged, this, [this](QListWidgetItem*, QListWidgetItem*) {
+    connect(lw, &QListWidget::currentItemChanged, this,
+            [this](QListWidgetItem* current, QListWidgetItem* previous) {
         pendingTargetWindow = nullptr;
+
+        // Selection is rendered from currentIndex() rather than Qt's selection state.
+        // With NoSelection, QListView does not reliably invalidate the old current
+        // item's custom delegate painting. Explicitly repaint both rectangles so a
+        // previously visited card cannot retain its accent outline.
+        if (previous)
+            lw->viewport()->update(lw->visualItemRect(previous));
+        if (current)
+            lw->viewport()->update(lw->visualItemRect(current));
+        lw->viewport()->update();
     });
 
     connect(qApp, &QApplication::focusWindowChanged, this, [this](QWindow* focusWindow) {
@@ -251,21 +424,41 @@ Widget::~Widget() {
 }
 
 void Widget::keyPressEvent(QKeyEvent* event) {
-    auto key = event->key();
-    auto modifiers = event->modifiers();
-    static const QHash<int, int> VimArrows = {
-        {Qt::Key_K, Qt::Key_Up},    // ↑
-        {Qt::Key_J, Qt::Key_Down},  // ↓
-        {Qt::Key_H, Qt::Key_Left},  // ←
-        {Qt::Key_L, Qt::Key_Right}, // →
+    int key = event->key();
+    const auto modifiers = event->modifiers();
+    if (key == Qt::Key_H) key = Qt::Key_Left;
+    else if (key == Qt::Key_L) key = Qt::Key_Right;
+    else if (key == Qt::Key_K) key = Qt::Key_Up;
+    else if (key == Qt::Key_J) key = Qt::Key_Down;
+
+    auto selectableItems = [this] {
+        QList<QListWidgetItem*> items;
+        for (int i = 0; i < lw->count(); ++i) {
+            auto* item = lw->item(i);
+            if (!item || item->data(SpacerRole).toBool())
+                continue;
+            const auto info = item->data(Qt::UserRole).value<WindowInfo>();
+            if (info.hwnd)
+                items.append(item);
+        }
+        return items;
     };
-    if (key == Qt::Key_Tab) { // switch to next or prev
-        auto i = lw->currentRow();
-        bool isShiftPressed = (modifiers & Qt::ShiftModifier);
-        // weird formula, but works (hhh)
-        auto index = (i - (2 * isShiftPressed - 1) + lw->count()) % lw->count();
-        lw->setCurrentRow(index);
-    } else if (key == Qt::Key_Up || key == Qt::Key_Down) {
+
+    if (key == Qt::Key_Tab || key == Qt::Key_Left || key == Qt::Key_Right) {
+        const auto items = selectableItems();
+        if (!items.isEmpty()) {
+            int current = items.indexOf(lw->currentItem());
+            if (current < 0) current = 0;
+            const bool backward = key == Qt::Key_Left
+                                  || (key == Qt::Key_Tab && (modifiers & Qt::ShiftModifier));
+            const int step = backward ? -1 : 1;
+            lw->setCurrentItem(items.at((current + step + items.size()) % items.size()));
+        }
+        event->accept();
+        return;
+    }
+
+    if (key == Qt::Key_Up || key == Qt::Key_Down) {
         if (auto item = lw->currentItem()) {
             auto center = lw->visualItemRect(item).center();
             // 转发映射到WheelEvent
@@ -274,31 +467,50 @@ void Widget::keyPressEvent(QKeyEvent* event) {
                                               Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
             QApplication::postEvent(lw, wheelEvent);
         }
-    } else if (key == Qt::Key_Left || key == Qt::Key_Right) { // 默认情况下 左右键可以切换item 只需要处理边界循环即可
-        const int N = lw->count();
-        const int i = lw->currentRow();
-        if (key == Qt::Key_Left && i == 0)
-            lw->setCurrentRow(N - 1);
-        else if (key == Qt::Key_Right && i == N - 1)
-            lw->setCurrentRow(0);
-    } else if (VimArrows.contains(key)) { // map [K J H L] to [↑ ↓ ← →]
-        QApplication::postEvent(lw, new QKeyEvent(QEvent::KeyPress, VimArrows.value(key), modifiers));
+        event->accept();
+        return;
     }
     QWidget::keyPressEvent(event);
 }
 
 bool Widget::forceShow() {
+#ifdef Q_OS_WIN
+    // Reapply the system backdrop immediately before every show. This picks up
+    // light/dark theme changes made while AltTaber stays resident in the tray.
+    QtWin::applySwitcherBackdrop(this, useDarkPalette());
+#endif
     setWindowOpacity(0.005); // reduce the translucent-window show flash
     showMinimized();
     showNormal();
-    setWindowOpacity(1);
     lw->doItemsLayout();
-    refreshThumbnails();
+    // DWM thumbnail surfaces are composed outside Qt's painter. Registering them in
+    // the same stack frame as showNormal() can use geometry from the previous Alt+Tab
+    // session and, after repeated show/hide cycles, leave narrow stale strips between
+    // cards. Refresh on the next event-loop turn after Qt has committed this layout.
+    const quint64 generation = ++thumbnailGeneration;
+    lw->viewport()->update();
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation != thumbnailGeneration || !isVisible())
+            return;
+        lw->doItemsLayout();
+        lw->viewport()->repaint();
+        refreshThumbnails();
+        // Keep the switcher effectively invisible until the DWM thumbnails have
+        // been registered and the delegate has repainted with PreviewAvailableRole.
+        // Otherwise the fallback application icons are visible for one frame before
+        // the live previews arrive on the next event-loop turn.
+        lw->viewport()->repaint();
+#ifdef Q_OS_WIN
+        DwmFlush();
+#endif
+        setWindowOpacity(1);
+    });
     return isForeground();
 }
 void Widget::setupLabelFont() {
     static auto reloadLabelFontCfg = [this] {
-        const QStringList Fonts = {"Microsoft YaHei UI", "Microsoft YaHei", "Consolas"}; // fallback
+        const QStringList Fonts = {"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
+                                   "Microsoft YaHei", "Consolas"}; // Windows 11 shell + CJK fallbacks
         auto labelFont = ui->label->font();
         labelFont.setPointSize(cfg.get("label/font_size", 10).toInt());
         auto defaultFF = QStringList{cfg.get("label/font_family", Fonts[0]).toString()};
@@ -345,6 +557,7 @@ void Widget::paintEvent(QPaintEvent*) {
 }
 
 void Widget::hideEvent(QHideEvent* event) {
+    ++thumbnailGeneration; // cancel any refresh queued by the previous show
     clearThumbnails();
     pendingTargetWindow = nullptr;
     QWidget::hideEvent(event);
@@ -363,17 +576,33 @@ QRect Widget::previewRectForItem(QListWidgetItem* item) const {
 }
 
 void Widget::clearThumbnails() {
+    bool hadRegisteredThumbnail = false;
     for (auto& thumbnail: thumbnails) {
-        if (thumbnail.handle)
+        if (thumbnail.handle) {
+            // Explicitly remove the DWM surface from composition before destroying
+            // the handle. This prevents a previous session's destination pixels from
+            // surviving for a frame when the next switcher is already visible.
+            DWM_THUMBNAIL_PROPERTIES props{};
+            props.dwFlags = DWM_TNP_VISIBLE;
+            props.fVisible = FALSE;
+            DwmUpdateThumbnailProperties(thumbnail.handle, &props);
             DwmUnregisterThumbnail(thumbnail.handle);
+            hadRegisteredThumbnail = true;
+        }
     }
     thumbnails.clear();
+
+#ifdef Q_OS_WIN
+    if (hadRegisteredThumbnail)
+        DwmFlush();
+#endif
 
     if (!lw) return;
     for (int i = 0; i < lw->count(); ++i) {
         if (auto item = lw->item(i))
             item->setData(PreviewAvailableRole, false);
     }
+    lw->viewport()->update();
 }
 
 void Widget::refreshThumbnails() {
@@ -405,13 +634,23 @@ void Widget::refreshThumbnails() {
             continue;
         }
 
-        SIZE sourceSize{};
-        if (SUCCEEDED(DwmQueryThumbnailSourceSize(thumbnail, &sourceSize)) &&
-            sourceSize.cx > 0 && sourceSize.cy > 0) {
-            const qreal scale = qMin(qreal(preview.width()) / qreal(sourceSize.cx),
-                                     qreal(preview.height()) / qreal(sourceSize.cy));
-            QSize fitted(qMax(1, qRound(sourceSize.cx * scale)),
-                         qMax(1, qRound(sourceSize.cy * scale)));
+        // DwmQueryThumbnailSourceSize can report the tiny iconic rectangle for a
+        // minimized window. Prefer the normal/restored geometry in that case so a
+        // minimized Explorer/Notepad preview is not flattened into a wide strip.
+        QSize source = sourceWindowSize(info.hwnd);
+        if (!IsIconic(info.hwnd)) {
+            SIZE queried{};
+            if (SUCCEEDED(DwmQueryThumbnailSourceSize(thumbnail, &queried)) &&
+                queried.cx > 0 && queried.cy > 0) {
+                source = QSize(queried.cx, queried.cy);
+            }
+        }
+
+        if (source.isValid() && !source.isEmpty()) {
+            const qreal scale = qMin(qreal(preview.width()) / qreal(source.width()),
+                                     qreal(preview.height()) / qreal(source.height()));
+            QSize fitted(qMax(1, qRound(source.width() * scale)),
+                         qMax(1, qRound(source.height() * scale)));
             QRect fittedRect(QPoint(), fitted);
             fittedRect.moveCenter(preview.center());
             preview = fittedRect;
@@ -574,72 +813,158 @@ bool Widget::prepareListWidget() {
     }
 
     const auto available = screen->availableGeometry();
-    // Windows 11 keeps the switcher compact and centered rather than allowing it to span
-    // the entire desktop. Use screen-relative preferred cards so this remains balanced from
-    // a small laptop panel to a high-resolution external monitor.
-    const int contentMaxWidth = qMax(MinimumCardWidth, qRound(available.width() * 0.86) - ListWidgetMargin.left() - ListWidgetMargin.right());
-    const int contentMaxHeight = qMax(MinimumCardHeight, qRound(available.height() * 0.72) - ListWidgetMargin.top() - ListWidgetMargin.bottom());
     const int count = windowList.size();
-    constexpr qreal CardAspect = qreal(DefaultCardWidth) / qreal(DefaultCardHeight);
-    const int desiredCardWidth = qBound(240, qRound(available.width() * 0.16), 320);
-    const int desiredCardHeight = qRound(desiredCardWidth / CardAspect);
+    // Measurements from the native Windows 11 25H2 switcher show a flow layout rather
+    // than an equal-cell grid: all cards in one snapshot share a height, while each
+    // card's width follows its source window aspect ratio. Rows are balanced and each
+    // row is centered independently. The outer switcher remains compact instead of
+    // stretching to almost the full monitor width.
+    const int contentMaxWidth = qMax(MinimumCardWidth,
+                                     qRound(available.width() * 0.70));
+    const int contentMaxHeight = qMax(MinimumCardHeight,
+                                      qRound(available.height() * 0.84)
+                                          - ListWidgetMargin.top() - ListWidgetMargin.bottom());
+    const int comfortableCardHeight = qBound(145, qRound(available.height() * 0.19), 165);
+    const int preferredCardHeight = qBound(210, qRound(available.height() * 0.29), 240);
+
+    auto widthsForHeight = [&windowList](int height) {
+        QList<int> widths;
+        widths.reserve(windowList.size());
+        for (const auto& info: windowList)
+            widths.append(cardWidthForWindow(info.hwnd, height));
+        return widths;
+    };
+
+    auto rowsFit = [contentMaxWidth, &widthsForHeight](int rows, int height,
+                                                       QList<int>* fittedCounts = nullptr) {
+        const auto widths = widthsForHeight(height);
+        const auto rowCounts = widthBalancedRowCounts(widths, rows);
+        if (rowCounts.size() != rows)
+            return false;
+        int item = 0;
+        for (const int rowCount: rowCounts) {
+            int rowWidth = 0;
+            for (int i = 0; i < rowCount && item < widths.size(); ++i, ++item)
+                rowWidth += widths.at(item);
+            if (rowWidth > contentMaxWidth)
+                return false;
+        }
+        if (item != widths.size())
+            return false;
+        if (fittedCounts)
+            *fittedCounts = rowCounts;
+        return true;
+    };
 
     int bestRows = 1;
-    int bestColumns = count;
-    QSize bestCardSize(desiredCardWidth, desiredCardHeight);
-    qreal bestScore = std::numeric_limits<qreal>::max();
-
+    QList<int> bestRowCounts;
+    bool layoutFound = false;
     for (int rows = 1; rows <= count; ++rows) {
-        const int columns = (count + rows - 1) / rows;
-        const int maxWidth = contentMaxWidth / columns;
-        const int maxHeight = contentMaxHeight / rows;
-        if (maxWidth <= 0 || maxHeight <= 0)
-            continue;
-
-        int cardWidth = qMin(desiredCardWidth, maxWidth);
-        int cardHeight = qRound(cardWidth / CardAspect);
-        if (cardHeight > qMin(desiredCardHeight, maxHeight)) {
-            cardHeight = qMin(desiredCardHeight, maxHeight);
-            cardWidth = qRound(cardHeight * CardAspect);
-        }
-
-        const int undersize = qMax(0, MinimumCardWidth - cardWidth) +
-                              qMax(0, MinimumCardHeight - cardHeight);
-        const int emptyCells = rows * columns - count;
-        const qreal sizeLoss = (desiredCardWidth - qMin(cardWidth, desiredCardWidth)) * 0.75 +
-                               (desiredCardHeight - qMin(cardHeight, desiredCardHeight)) * 0.45;
-        const qreal score = undersize * 20.0 + emptyCells * 180.0 + sizeLoss + rows * 12.0;
-
-        if (score < bestScore) {
-            bestScore = score;
+        const int candidateHeight = qMin(comfortableCardHeight, contentMaxHeight / rows);
+        if (candidateHeight < MinimumCardHeight)
+            break;
+        QList<int> rowCounts;
+        if (rowsFit(rows, candidateHeight, &rowCounts)) {
             bestRows = rows;
-            bestColumns = columns;
-            bestCardSize = QSize(qMax(1, cardWidth), qMax(1, cardHeight));
+            bestRowCounts = rowCounts;
+            layoutFound = true;
+            break;
         }
     }
 
-    lw->setGridSize(bestCardSize);
+    if (!layoutFound) {
+        // Extreme window counts can exhaust the comfortable height. Keep increasing
+        // rows and allow a smaller card rather than overflowing the monitor.
+        constexpr int AbsoluteMinimumHeight = 72;
+        for (int rows = 1; rows <= count; ++rows) {
+            const int candidateHeight = qMin(comfortableCardHeight, contentMaxHeight / rows);
+            if (candidateHeight < AbsoluteMinimumHeight)
+                break;
+            QList<int> rowCounts;
+            if (rowsFit(rows, candidateHeight, &rowCounts)) {
+                bestRows = rows;
+                bestRowCounts = rowCounts;
+                layoutFound = true;
+                break;
+            }
+        }
+    }
+
+    if (!layoutFound) {
+        bestRows = qMin(count, qMax(1, contentMaxHeight / 72));
+        bestRowCounts = widthBalancedRowCounts(widthsForHeight(72), bestRows);
+    }
+
+    int bestCardHeight = qMin(preferredCardHeight, contentMaxHeight / bestRows);
+    while (bestCardHeight > 72) {
+        QList<int> rowCounts;
+        if (rowsFit(bestRows, bestCardHeight, &rowCounts)) {
+            bestRowCounts = rowCounts;
+            break;
+        }
+        --bestCardHeight;
+    }
+    bestCardHeight = qMax(72, bestCardHeight);
+    if (bestRowCounts.isEmpty())
+        bestRowCounts = widthBalancedRowCounts(widthsForHeight(bestCardHeight), bestRows);
+
+    const auto cardWidths = widthsForHeight(bestCardHeight);
+    QList<int> rowWidths;
+    rowWidths.reserve(bestRows);
+    int itemIndex = 0;
+    int layoutWidth = 1;
+    for (const int rowCount: bestRowCounts) {
+        int rowWidth = 0;
+        for (int i = 0; i < rowCount; ++i)
+            rowWidth += cardWidths.at(itemIndex++);
+        rowWidths.append(rowWidth);
+        layoutWidth = qMax(layoutWidth, rowWidth);
+    }
+
+    lw->setGridSize(QSize());
     lw->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     lw->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-    for (auto& info: windowList) {
-        auto title = info.title;
-        if (title.isEmpty())
-            title = Util::getFileDescription(info.exePath);
-        if (title.isEmpty())
-            title = "Window";
+    QList<QListWidgetItem*> windowItems;
+    windowItems.reserve(count);
+    auto addSpacer = [this, bestCardHeight](int width) {
+        if (width <= 0)
+            return;
+        auto* spacer = new QListWidgetItem;
+        spacer->setData(SpacerRole, true);
+        spacer->setFlags(Qt::NoItemFlags);
+        spacer->setSizeHint(QSize(width, bestCardHeight));
+        lw->addItem(spacer);
+    };
 
-        auto* item = new QListWidgetItem(info.icon, title);
-        item->setData(Qt::UserRole, QVariant::fromValue(info));
-        item->setData(PreviewAvailableRole, false);
-        item->setSizeHint(bestCardSize);
-        lw->addItem(item);
+    itemIndex = 0;
+    for (int row = 0; row < bestRows; ++row) {
+        const int freeWidth = qMax(0, layoutWidth - rowWidths.at(row));
+        const int leftSpacer = freeWidth / 2;
+        const int rightSpacer = freeWidth - leftSpacer;
+        addSpacer(leftSpacer);
+
+        for (int i = 0; i < bestRowCounts.at(row); ++i, ++itemIndex) {
+            const auto& info = windowList.at(itemIndex);
+            auto title = info.title;
+            if (title.isEmpty())
+                title = Util::getFileDescription(info.exePath);
+            if (title.isEmpty())
+                title = "Window";
+
+            auto* item = new QListWidgetItem(info.icon, title);
+            item->setData(Qt::UserRole, QVariant::fromValue(info));
+            item->setData(PreviewAvailableRole, false);
+            item->setSizeHint(QSize(cardWidths.at(itemIndex), bestCardHeight));
+            lw->addItem(item);
+            windowItems.append(item);
+        }
+
+        addSpacer(rightSpacer);
     }
 
-    // +1 prevents a style/DPI rounding edge from making the viewport one pixel too small
-    // and moving a whole column to the next row. The frame itself is disabled above.
-    lw->setFixedSize(bestColumns * bestCardSize.width() + 1,
-                     bestRows * bestCardSize.height() + 1);
+    // +1 prevents a fractional-DPI boundary from wrapping a completed row.
+    lw->setFixedSize(layoutWidth + 1, bestRows * bestCardHeight + 1);
     lw->doItemsLayout();
 
     // Defensive check: every item must actually be inside the viewport. If Qt's style
@@ -666,16 +991,16 @@ bool Widget::prepareListWidget() {
     lw->move(lwRect.topLeft());
     lw->doItemsLayout();
 
-    if (lw->count() >= 2) {
+    if (windowItems.size() >= 2) {
         const auto foreground = GetForegroundWindow();
         const bool firstIsForeground = windowList.at(0).hwnd == foreground;
-        lw->setCurrentRow(firstIsForeground ? 1 : 0);
-    } else {
-        lw->setCurrentRow(0);
-    }
+        lw->setCurrentItem(windowItems.at(firstIsForeground ? 1 : 0));
+    } else if (!windowItems.isEmpty())
+        lw->setCurrentItem(windowItems.first());
 
-    qDebug() << "Prepared" << lw->count() << "window thumbnails on" << screen->name()
-             << "grid" << bestColumns << "x" << bestRows << "card" << bestCardSize;
+    qDebug() << "Prepared" << windowItems.size() << "window thumbnails on" << screen->name()
+             << "flow rows" << bestRowCounts << "height" << bestCardHeight
+             << "row widths" << rowWidths << "card widths" << cardWidths;
     return true;
 }
 
@@ -735,6 +1060,8 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
             pos = lw->viewport()->mapFrom(lw, pos);
 
         if (auto* item = lw->itemAt(pos)) {
+            if (item->data(SpacerRole).toBool())
+                return true;
             const auto info = item->data(Qt::UserRole).value<WindowInfo>();
             if (!info.hwnd || !IsWindow(info.hwnd))
                 return true;
@@ -781,6 +1108,8 @@ bool Widget::eventFilter(QObject* watched, QEvent* event) {
             cursorPos = lw->viewport()->mapFrom(lw, cursorPos);
 
         if (auto item = lw->itemAt(cursorPos)) {
+            if (item->data(SpacerRole).toBool())
+                return true;
             if (lw->currentItem() != item)
                 lw->setCurrentItem(item);
 

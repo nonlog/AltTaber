@@ -1,2 +1,9 @@
 ﻿cmake-build-*
 .idea
+
+# Local agent/development state and build artifacts
+.local/
+.local-test/
+build-codex*/
+test-build/
+%SystemDrive%/
